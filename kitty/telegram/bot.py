@@ -30,6 +30,7 @@ class TelegramReporter:
         self._daily_report: Any = None
         self._force_cycle_flag = asyncio.Event()
         self._cycle_callback: Callable[[], Coroutine[Any, Any, None]] | None = None
+        self._pending_live_confirm = False  # live 모드 전환 확인 대기 플래그
 
     def build(self) -> "TelegramReporter":
         self._app = (
@@ -105,6 +106,7 @@ class TelegramReporter:
             ("buy",        self._cmd_buy),
             ("sell",       self._cmd_sell),
             ("setbuy",     self._cmd_setbuy),
+            ("setmode",    self._cmd_setmode),
             ("pause",      self._cmd_pause),
             ("resume",     self._cmd_resume),
             ("stop",       self._cmd_stop),
@@ -146,7 +148,8 @@ class TelegramReporter:
             "/cycle       — 즉시 사이클 실행\n"
             "/stop        — 시스템 종료\n\n"
             "*설정*\n"
-            "/setbuy <금액> — 최대 매수금액 변경\n\n"
+            "/setbuy <금액>       — 최대 매수금액 변경\n"
+            "/setmode <paper|live> — 매매 모드 전환\n\n"
             "*수동 매매*\n"
             "/buy <종목코드> <수량>  — 수동 매수\n"
             "/sell <종목코드> <수량> — 수동 매도\n\n"
@@ -348,6 +351,64 @@ class TelegramReporter:
             logger.info(f"[텔레그램] 최대 매수금액 변경: {amount:,}원")
         except ValueError:
             await update.message.reply_text("숫자를 입력하세요. 예: `/setbuy 500000`", parse_mode="Markdown")  # type: ignore[union-attr]
+
+    async def _cmd_setmode(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        from kitty.config import TradingMode
+        args = ctx.args or []
+
+        # 확인 단계: /setmode live confirm
+        if self._pending_live_confirm:
+            self._pending_live_confirm = False
+            if args and args[0].lower() == "confirm":
+                settings.trading_mode = TradingMode.LIVE
+                if self._broker:
+                    self._broker.reset_token()
+                await update.message.reply_text(  # type: ignore[union-attr]
+                    "🔴 *실전 매매 모드로 전환되었습니다.*\n실제 자금으로 거래됩니다.",
+                    parse_mode="Markdown",
+                )
+                logger.info("[텔레그램] 매매 모드 전환: live")
+                return
+            else:
+                await update.message.reply_text("❌ 취소되었습니다. 다시 `/setmode live`를 입력하세요.", parse_mode="Markdown")  # type: ignore[union-attr]
+                return
+
+        if not args:
+            current = settings.trading_mode.value
+            await update.message.reply_text(  # type: ignore[union-attr]
+                f"현재 모드: `{current}`\n사용법: `/setmode paper` 또는 `/setmode live`",
+                parse_mode="Markdown",
+            )
+            return
+
+        mode = args[0].lower()
+        if mode not in ("paper", "live"):
+            await update.message.reply_text("❌ `paper` 또는 `live`만 입력 가능합니다.", parse_mode="Markdown")  # type: ignore[union-attr]
+            return
+
+        if mode == settings.trading_mode.value:
+            await update.message.reply_text(f"이미 `{mode}` 모드입니다.", parse_mode="Markdown")  # type: ignore[union-attr]
+            return
+
+        if mode == "live":
+            self._pending_live_confirm = True
+            await update.message.reply_text(  # type: ignore[union-attr]
+                "⚠️ *실전 매매 모드로 전환하려 합니다.*\n"
+                "실제 자금으로 거래됩니다. 계속하려면:\n"
+                "`/setmode confirm`",
+                parse_mode="Markdown",
+            )
+            return
+
+        # paper로 전환 (확인 불필요)
+        settings.trading_mode = TradingMode.PAPER
+        if self._broker:
+            self._broker.reset_token()
+        await update.message.reply_text(  # type: ignore[union-attr]
+            "📄 *모의 매매 모드로 전환되었습니다.*",
+            parse_mode="Markdown",
+        )
+        logger.info("[텔레그램] 매매 모드 전환: paper")
 
     async def _cmd_pause(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         self._paused = True

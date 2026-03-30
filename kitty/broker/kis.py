@@ -307,5 +307,10 @@ class KISBroker:
             logger.warning(f"주문 취소 실패: {data.get('msg1')}")
         return success
 
+    def reset_token(self) -> None:
+        """모드 전환 시 캐시된 토큰 무효화 (다음 요청 시 재발급)"""
+        self._access_token = None
+        self._token_expires_at = datetime.min
+
     async def close(self) -> None:
         await self._client.aclose()
