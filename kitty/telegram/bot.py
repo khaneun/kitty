@@ -1,6 +1,7 @@
 """텔레그램 봇 - 보고 및 원격 제어"""
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 from telegram import Update
@@ -107,6 +108,11 @@ class TelegramReporter:
             ("pause",      self._cmd_pause),
             ("resume",     self._cmd_resume),
             ("stop",       self._cmd_stop),
+            ("logs",       self._cmd_logs),
+            ("deploy",     self._cmd_deploy),
+            ("restart",    self._cmd_restart),
+            ("shutdown",   self._cmd_shutdown),
+            ("startall",   self._cmd_startall),
         ]
         for name, handler in cmds:
             self._app.add_handler(CommandHandler(name, self._guard(handler)))
@@ -143,7 +149,13 @@ class TelegramReporter:
             "/setbuy <금액> — 최대 매수금액 변경\n\n"
             "*수동 매매*\n"
             "/buy <종목코드> <수량>  — 수동 매수\n"
-            "/sell <종목코드> <수량> — 수동 매도"
+            "/sell <종목코드> <수량> — 수동 매도\n\n"
+            "*AWS 제어*\n"
+            "/logs [n]    — 최근 로그 n줄 (기본 50)\n"
+            "/deploy      — 코드 재배포 (git pull + 재빌드)\n"
+            "/restart     — 컨테이너 재시작\n"
+            "/shutdown    — 서비스 전체 중단\n"
+            "/startall    — 서비스 전체 시작"
         )
         await update.message.reply_text(text, parse_mode="Markdown")  # type: ignore[union-attr]
 
@@ -356,6 +368,103 @@ class TelegramReporter:
         # 프로세스 종료
         import os, signal
         os.kill(os.getpid(), signal.SIGINT)
+
+    # ---- AWS 제어 명령어 ----
+
+    async def _run_shell(self, cmd: str, timeout: int = 300) -> tuple[str, str, int]:
+        """비동기 셸 명령 실행 → (stdout, stderr, returncode)"""
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return "", "timeout", -1
+        return stdout.decode(errors="replace"), stderr.decode(errors="replace"), proc.returncode
+
+    async def _cmd_logs(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        args = ctx.args or []
+        n = 50
+        if args:
+            try:
+                n = min(int(args[0]), 200)
+            except ValueError:
+                pass
+
+        log_file = Path(f"/app/logs/kitty_{date.today()}.log")
+        if not log_file.exists():
+            await update.message.reply_text("📭 오늘 로그 파일 없음")  # type: ignore[union-attr]
+            return
+
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        tail = "\n".join(lines[-n:])
+        if not tail:
+            await update.message.reply_text("로그 내용 없음")  # type: ignore[union-attr]
+            return
+        if len(tail) > 3800:
+            tail = "...(생략)...\n" + tail[-3800:]
+        await update.message.reply_text(  # type: ignore[union-attr]
+            f"📋 *최근 로그 {min(n, len(lines))}줄*\n```\n{tail}\n```",
+            parse_mode="Markdown",
+        )
+
+    async def _cmd_deploy(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text("🚀 재배포를 시작합니다. 잠시 후 봇이 재연결됩니다...")  # type: ignore[union-attr]
+        logger.info("[텔레그램] 재배포 요청")
+
+        # git pull
+        stdout, stderr, rc = await self._run_shell("cd /host/kitty && git pull")
+        if rc != 0:
+            await update.message.reply_text(f"❌ git pull 실패\n```{stderr[:300]}```", parse_mode="Markdown")  # type: ignore[union-attr]
+            return
+        await update.message.reply_text(f"✅ git pull\n```{stdout[:200].strip()}```", parse_mode="Markdown")  # type: ignore[union-attr]
+
+        # docker build
+        await update.message.reply_text("🔨 이미지 빌드 중...")  # type: ignore[union-attr]
+        _, stderr, rc = await self._run_shell("docker build -t kitty-trader /host/kitty", timeout=600)
+        if rc != 0:
+            await update.message.reply_text(f"❌ 빌드 실패\n```{stderr[:300]}```", parse_mode="Markdown")  # type: ignore[union-attr]
+            return
+
+        # 현재 컨테이너 env 추출 후 재기동 (이 시점부터 컨테이너가 교체됨)
+        await update.message.reply_text("🔄 컨테이너 교체 중... (연결이 잠시 끊깁니다)")  # type: ignore[union-attr]
+        restart_cmd = (
+            "docker inspect kitty-trader --format '{{json .Config.Env}}' | "
+            "python3 -c \"import sys,json; [print(x) for x in json.load(sys.stdin)]\" "
+            "> /tmp/kitty_env.txt && "
+            "docker stop kitty-trader && docker rm kitty-trader && "
+            "docker run -d --name kitty-trader --restart unless-stopped "
+            "--env-file /tmp/kitty_env.txt "
+            "-v /home/ec2-user/kitty/logs:/app/logs "
+            "-v /var/run/docker.sock:/var/run/docker.sock "
+            "-v /home/ec2-user/kitty:/host/kitty "
+            "kitty-trader && "
+            "rm -f /tmp/kitty_env.txt"
+        )
+        await self._run_shell(restart_cmd)
+        # 컨테이너가 교체되므로 이후 코드는 실행되지 않음
+
+    async def _cmd_restart(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text("🔄 컨테이너를 재시작합니다. 잠시 후 재연결됩니다...")  # type: ignore[union-attr]
+        logger.info("[텔레그램] 컨테이너 재시작 요청")
+        await self._run_shell("docker restart kitty-trader")
+        # 컨테이너 재시작으로 이후 코드 실행 안 됨
+
+    async def _cmd_shutdown(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text("⛔ 모든 서비스를 중단합니다.")  # type: ignore[union-attr]
+        logger.info("[텔레그램] 서비스 전체 중단 요청")
+        await self._run_shell("docker stop kitty-trader")
+
+    async def _cmd_startall(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text("▶️ 서비스를 시작합니다. 잠시 후 재연결됩니다...")  # type: ignore[union-attr]
+        logger.info("[텔레그램] 서비스 전체 시작 요청")
+        # 중단된 컨테이너 재시작 (이미 실행 중이면 무시됨)
+        _, stderr, rc = await self._run_shell("docker start kitty-trader")
+        if rc != 0:
+            await update.message.reply_text(f"❌ 시작 실패\n```{stderr[:300]}```", parse_mode="Markdown")  # type: ignore[union-attr]
 
     # ---- 속성 ----
 
