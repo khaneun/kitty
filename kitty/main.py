@@ -1,9 +1,11 @@
 """Kitty - 한국투자증권 멀티 에이전트 자동 매매 시스템"""
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import holidays
 
+_KST = ZoneInfo("Asia/Seoul")
 _kr_holidays = holidays.KR()
 
 from kitty.agents import (
@@ -23,17 +25,16 @@ from kitty.utils import logger, print_portfolio_and_balance, setup_logger
 
 def _is_pre_market_or_market() -> bool:
     """분석 시작 시간 여부 (평일 + 공휴일 제외 8:50~15:30 KST)"""
-    now = datetime.now()
+    now = datetime.now(_KST)
     if now.weekday() >= 5 or now.date() in _kr_holidays:
         return False
-    start = now.hour * 60 + now.minute >= 8 * 60 + 50   # 08:50 이후
-    end = now.hour * 60 + now.minute < 15 * 60 + 30      # 15:30 이전
-    return start and end
+    minutes = now.hour * 60 + now.minute
+    return 8 * 60 + 50 <= minutes < 15 * 60 + 30
 
 
 def _is_market_hours() -> bool:
     """주문 가능 시간 여부 (평일 + 공휴일 제외 9:00~15:30 KST)"""
-    now = datetime.now()
+    now = datetime.now(_KST)
     return (
         now.weekday() < 5
         and now.date() not in _kr_holidays
@@ -65,7 +66,7 @@ async def run_trading_cycle(
     logger.info(f"보유종목: {len(portfolio)}개 | 가용현금: {available_cash:,}원 | 총자산: {total_asset_value:,}원")
 
     # 2. 섹터분석 (SectorAnalystAgent)
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_date = datetime.now(_KST).strftime("%Y-%m-%d")
     analysis = await sector_analyst.run({"portfolio": portfolio, "current_date": current_date})
     daily_report.record_analysis(analysis)
     reporter.update_analysis(analysis)
@@ -203,7 +204,7 @@ async def main() -> None:
 
     try:
         while True:
-            now = datetime.now()
+            now = datetime.now(_KST)
 
             # 날짜가 바뀌면 일일 리포트 텔레그램 발송 후 새 리포트 시작
             today = now.strftime("%Y-%m-%d")

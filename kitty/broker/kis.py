@@ -6,6 +6,9 @@ Docs: https://apiportal.koreainvestment.com
 """
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_KST = ZoneInfo("Asia/Seoul")
 
 import httpx
 from pydantic import BaseModel
@@ -246,8 +249,8 @@ class KISBroker:
             params={
                 "CANO": settings.active_kis_account_number[:8],
                 "ACNT_PRDT_CD": settings.active_kis_account_number[8:],
-                "INQR_STRT_DT": datetime.now().strftime("%Y%m%d"),
-                "INQR_END_DT": datetime.now().strftime("%Y%m%d"),
+                "INQR_STRT_DT": datetime.now(_KST).strftime("%Y%m%d"),
+                "INQR_END_DT": datetime.now(_KST).strftime("%Y%m%d"),
                 "SLL_BUY_DVSN_CD": "00",
                 "INQR_DVSN": "00",
                 "PDNO": "",

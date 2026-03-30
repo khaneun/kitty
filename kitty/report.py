@@ -3,6 +3,9 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_KST = ZoneInfo("Asia/Seoul")
 
 from kitty.utils import logger
 
@@ -13,7 +16,7 @@ class CycleRecord:
     """매매 사이클 1회 기록"""
 
     def __init__(self) -> None:
-        self.timestamp: str = datetime.now().strftime("%H:%M:%S")
+        self.timestamp: str = datetime.now(_KST).strftime("%H:%M:%S")
         self.market_analysis: dict[str, Any] = {}
         self.stock_evaluation: dict[str, Any] = {}
         self.stock_picks: dict[str, Any] = {}
@@ -37,7 +40,7 @@ class DailyReport:
     """하루치 매매 리포트 - 사이클마다 누적하고 파일로 저장"""
 
     def __init__(self) -> None:
-        self.date: str = datetime.now().strftime("%Y-%m-%d")
+        self.date: str = datetime.now(_KST).strftime("%Y-%m-%d")
         self.cycles: list[CycleRecord] = []
         self._current: CycleRecord | None = None
         REPORTS_DIR.mkdir(exist_ok=True)
