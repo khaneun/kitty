@@ -18,6 +18,7 @@ from kitty.agents import (
 )
 from kitty.broker import KISBroker
 from kitty.config import settings
+from kitty.evaluator import PerformanceEvaluator
 from kitty.report import DailyReport
 from kitty.telegram import TelegramReporter
 from kitty.utils import logger, print_portfolio_and_balance, setup_logger
@@ -30,6 +31,15 @@ def _is_pre_market_or_market() -> bool:
         return False
     minutes = now.hour * 60 + now.minute
     return 8 * 60 + 50 <= minutes < 15 * 60 + 30
+
+
+def _is_post_market_eval_window() -> bool:
+    """장 마감 직후 평가 실행 구간 (15:35 ~ 16:00 KST)"""
+    now = datetime.now(_KST)
+    if now.weekday() >= 5 or now.date() in _kr_holidays:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return 15 * 60 + 35 <= minutes < 16 * 60
 
 
 def _is_market_hours() -> bool:
@@ -164,6 +174,21 @@ async def run_trading_cycle(
     logger.info("=== 매매 사이클 완료 ===")
 
 
+def _format_eval_summary(results: dict) -> str:
+    """성과 평가 결과 → 텔레그램 메시지"""
+    lines = ["📊 *오늘의 에이전트 성과 평가*\n"]
+    score_emoji = {range(0, 4): "🔴", range(4, 7): "🟡", range(7, 11): "🟢"}
+    for agent_name, entry in results.items():
+        score = entry.get("score", 5)
+        emoji = next((e for r, e in score_emoji.items() if score in r), "⚪")
+        lines.append(f"{emoji} *{agent_name}* `{score}/10`")
+        lines.append(f"   {entry.get('summary', '')}")
+        if entry.get("improvement"):
+            lines.append(f"   💡 _{entry['improvement']}_")
+    lines.append("\n_피드백이 각 에이전트에 반영되었습니다._")
+    return "\n".join(lines)
+
+
 async def main() -> None:
     setup_logger()
     logger.info(f"🐱 Kitty 시작 - 모드: {settings.trading_mode.value}")
@@ -201,6 +226,8 @@ async def main() -> None:
     await reporter.send(f"🐱 Kitty 시작! 모드: `{settings.trading_mode.value}`")
     await print_portfolio_and_balance(broker, label="시작")
     last_report_date = daily_report.date
+    last_eval_date: str = ""
+    evaluator = PerformanceEvaluator(broker)
 
     try:
         while True:
@@ -212,6 +239,20 @@ async def main() -> None:
                 await reporter.send(daily_report.telegram_summary())
                 daily_report = DailyReport()
                 last_report_date = today
+
+            # 장 마감 직후 성과 평가 (15:35~16:00, 하루 1회)
+            if _is_post_market_eval_window() and last_eval_date != today:
+                last_eval_date = today
+                try:
+                    results = await evaluator.run(daily_report)
+                    if results:
+                        # 에이전트 system_prompt 즉시 갱신
+                        for agent in [sector_analyst, stock_evaluator, stock_picker,
+                                      asset_manager, buy_executor, sell_executor]:
+                            agent.reload_feedback()
+                        await reporter.send(_format_eval_summary(results))
+                except Exception as e:
+                    logger.error(f"성과 평가 오류: {e}")
 
             # 8:50 이전 또는 15:30 이후에는 사이클 건너뜀 (모의/실전 공통)
             if not _is_pre_market_or_market():

@@ -11,11 +11,22 @@ class BaseAgent(ABC):
 
     def __init__(self, name: str, system_prompt: str) -> None:
         self.name = name
-        self.system_prompt = system_prompt
+        self._base_prompt = system_prompt
+        self.system_prompt = self._build_system_prompt()
         self._conversation: list[dict[str, Any]] = []
         self._provider = settings.ai_provider
         self._model = settings.resolved_model
         logger.info(f"[{self.name}] provider={self._provider}, model={self._model}")
+
+    def _build_system_prompt(self) -> str:
+        """base prompt + 성과 피드백 합산"""
+        from kitty.feedback.store import get_feedback_prompt
+        feedback = get_feedback_prompt(self.name)
+        return self._base_prompt + feedback if feedback else self._base_prompt
+
+    def reload_feedback(self) -> None:
+        """피드백 파일이 업데이트됐을 때 system_prompt 갱신"""
+        self.system_prompt = self._build_system_prompt()
 
     async def think(self, user_message: str) -> str:
         """설정된 AI provider에게 메시지를 보내고 응답을 받는다."""
