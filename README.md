@@ -87,12 +87,13 @@ kitty/
 │   ├── stock_evaluator.py     # [2] 종목평가가
 │   ├── stock_picker.py        # [3] 종목발굴가
 │   ├── asset_manager.py       # [4] 자산운용가
-│   ├── buy_executor.py        # [5] 매수실행가 (스마트 주문)
-│   └── sell_executor.py       # [6] 매도실행가 (스마트 주문)
+│   ├── buy_executor.py        # [5] 매수실행가 (스마트 주문, AI 응답 float → int 보장)
+│   └── sell_executor.py       # [6] 매도실행가 (스마트 주문, AI 응답 float → int 보장)
 ├── broker/
 │   └── kis.py                 # KIS API (시세·잔고·주문·취소·체결조회)
 ├── evaluator/
 │   └── performance.py         # 장 마감 후 에이전트 성과 평가 엔진
+│                              #   체결 0건 시 1점 기록 (평가 누락 방지)
 ├── feedback/
 │   └── store.py               # 피드백 영속 저장소 (feedback/*.json)
 ├── telegram/
@@ -103,6 +104,8 @@ kitty/
 ├── config.py                  # 환경 설정 (Pydantic)
 ├── main.py                    # 메인 루프
 └── report.py                  # 일별 JSON 리포트
+start.sh                       # EC2 부팅 스크립트 (git pull → Secrets 로딩 → Docker 빌드)
+release-note.md                # 변경 이력
 ```
 
 ---
@@ -245,12 +248,15 @@ MAX_POSITION_SIZE=5000000    # 종목당 최대 보유금액 (원)
 EC2 시작
   → systemd: docker.service
   → systemd: kitty.service (start.sh)
+      → git pull origin main          ← GitHub 최신 코드 자동 반영
       → AWS Secrets Manager에서 시크릿 로딩
       → Docker 빌드 (캐시 활용)
       → kitty-trader 컨테이너 시작
           → logs/, feedback/ 볼륨 마운트
           → /var/run/docker.sock 마운트 (Telegram AWS 제어용)
 ```
+
+> 코드 수정 후 `git push`만 하면 다음 영업일 EC2 부팅 시 자동으로 반영됩니다.
 
 ### Secrets Manager에 저장되는 값
 
@@ -272,14 +278,14 @@ kitty/prod
 
 ### 평가 지표
 
-| 에이전트 | 평가 기준 |
-|----------|-----------|
-| 섹터분석가 | 섹터 방향 예측 적중률 (bullish/bearish vs 실제 등락) |
-| 종목발굴가 | 추천 종목의 당일 수익률 평균 |
-| 종목평가가 | HOLD/BUY_MORE/SELL 판단 정확도 |
-| 자산운용가 | 최종 주문 방향성 점수 (매수→상승, 매도→하락) |
-| 매수실행가 | 체결가 vs EOD 가격 (저가 매수 효율) |
-| 매도실행가 | 체결가 vs EOD 가격 (고가 매도 효율) |
+| 에이전트 | 평가 기준 | 점수 산정 |
+|----------|-----------|-----------|
+| 섹터분석가 | 섹터 방향 예측 적중률 (bullish/bearish vs 실제 등락) | 적중률 × 10 |
+| 종목발굴가 | 추천 종목의 당일 수익률 평균 | 수익률 구간별 2~9점 |
+| 종목평가가 | HOLD/BUY_MORE/SELL 판단 정확도 | 정확도 × 10 |
+| 자산운용가 | 최종 주문 방향성 점수 (매수→상승, 매도→하락) | 방향성 평균 구간별 2~9점 |
+| 매수실행가 | 체결가 vs EOD 가격 (저가 매수 효율) | 효율 구간별 3~9점, 체결 0건 시 1점 |
+| 매도실행가 | 체결가 vs EOD 가격 (고가 매도 효율) | 효율 구간별 3~9점, 체결 0건 시 1점 |
 
 ### 피드백 반영 방식
 
