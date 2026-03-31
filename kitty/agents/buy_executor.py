@@ -175,8 +175,8 @@ class BuyExecutorAgent(BaseAgent):
 
         for order in buy_orders:
             symbol = order["symbol"]
-            quantity = order["quantity"]
-            price = order.get("price", 0)
+            quantity = int(order["quantity"])
+            price = int(order.get("price", 0))
             order_type = order.get("order_type", "SINGLE")
             priority = order.get("priority", "NORMAL")
 

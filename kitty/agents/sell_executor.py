@@ -85,7 +85,7 @@ class SellExecutorAgent(BaseAgent):
             try:
                 quote = await self.broker.get_quote(symbol)
                 # Offer slightly above current price to improve fill odds
-                limit_price = int(quote.current_price * 1.002)
+                limit_price = round(quote.current_price * 1.002)
             except Exception as e:
                 logger.warning(f"[매도실행가] {symbol} 현재가 조회 실패, 시장가 사용: {e}")
                 limit_price = 0
@@ -202,8 +202,8 @@ class SellExecutorAgent(BaseAgent):
 
         for order in sell_orders:
             symbol = order["symbol"]
-            quantity = order["quantity"]
-            price = order.get("price", 0)
+            quantity = int(order["quantity"])
+            price = int(order.get("price", 0))
             order_type = order.get("order_type", "SINGLE")
             priority = order.get("priority", "NORMAL")
 
