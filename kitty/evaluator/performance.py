@@ -248,21 +248,33 @@ class PerformanceEvaluator:
     def _eval_buy_executor(self, report: DailyReport, eod: dict) -> dict:
         """체결가 vs EOD 가격 (낮은 가격에 매수할수록 좋음)"""
         efficiencies: list[float] = []
+        failed_count = 0
 
         for c in report.cycles:
             for r in c.buy_results:
-                if r.get("status") not in ("FILLED", "PARTIAL"):
-                    continue
-                sym, exec_price = r.get("symbol"), r.get("price", 0)
-                if not sym or not exec_price or sym not in eod:
-                    continue
-                eod_price = eod[sym]["price"]
-                # EOD 대비 저가 매수: 양수일수록 좋음
-                eff = (eod_price - exec_price) / exec_price * 100
-                efficiencies.append(eff)
+                if r.get("status") in ("FILLED", "PARTIAL"):
+                    sym, exec_price = r.get("symbol"), r.get("price", 0)
+                    if not sym or not exec_price or sym not in eod:
+                        continue
+                    eod_price = eod[sym]["price"]
+                    eff = (eod_price - exec_price) / exec_price * 100
+                    efficiencies.append(eff)
+                elif r.get("status") == "FAILED":
+                    failed_count += 1
 
-        if not efficiencies:
+        total_attempted = len(efficiencies) + failed_count
+        if total_attempted == 0:
             return {}
+
+        # 시도는 했으나 체결 없으면 최저점
+        if not efficiencies:
+            return {
+                "score": 1,
+                "filled_count": 0,
+                "failed_count": failed_count,
+                "avg_efficiency_pct": None,
+                "note": "주문 시도했으나 체결 없음",
+            }
 
         avg = sum(efficiencies) / len(efficiencies)
         score = 5
@@ -271,25 +283,43 @@ class PerformanceEvaluator:
         elif avg > -0.5: score = 5
         else:            score = 3
 
-        return {"score": score, "filled_count": len(efficiencies), "avg_efficiency_pct": round(avg, 2)}
+        return {
+            "score": score,
+            "filled_count": len(efficiencies),
+            "failed_count": failed_count,
+            "avg_efficiency_pct": round(avg, 2),
+        }
 
     def _eval_sell_executor(self, report: DailyReport, eod: dict) -> dict:
         """체결가 vs EOD 가격 (높은 가격에 매도할수록 좋음)"""
         efficiencies: list[float] = []
+        failed_count = 0
 
         for c in report.cycles:
             for r in c.sell_results:
-                if r.get("status") not in ("FILLED", "PARTIAL"):
-                    continue
-                sym, exec_price = r.get("symbol"), r.get("price", 0)
-                if not sym or not exec_price or sym not in eod:
-                    continue
-                eod_price = eod[sym]["price"]
-                eff = (exec_price - eod_price) / eod_price * 100
-                efficiencies.append(eff)
+                if r.get("status") in ("FILLED", "PARTIAL"):
+                    sym, exec_price = r.get("symbol"), r.get("price", 0)
+                    if not sym or not exec_price or sym not in eod:
+                        continue
+                    eod_price = eod[sym]["price"]
+                    eff = (exec_price - eod_price) / eod_price * 100
+                    efficiencies.append(eff)
+                elif r.get("status") == "FAILED":
+                    failed_count += 1
 
-        if not efficiencies:
+        total_attempted = len(efficiencies) + failed_count
+        if total_attempted == 0:
             return {}
+
+        # 시도는 했으나 체결 없으면 최저점
+        if not efficiencies:
+            return {
+                "score": 1,
+                "filled_count": 0,
+                "failed_count": failed_count,
+                "avg_efficiency_pct": None,
+                "note": "주문 시도했으나 체결 없음",
+            }
 
         avg = sum(efficiencies) / len(efficiencies)
         score = 5
@@ -298,7 +328,12 @@ class PerformanceEvaluator:
         elif avg > -0.5: score = 5
         else:            score = 3
 
-        return {"score": score, "filled_count": len(efficiencies), "avg_efficiency_pct": round(avg, 2)}
+        return {
+            "score": score,
+            "filled_count": len(efficiencies),
+            "failed_count": failed_count,
+            "avg_efficiency_pct": round(avg, 2),
+        }
 
     # ──────────────────────────────────────────
     # AI 피드백 생성
