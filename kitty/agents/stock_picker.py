@@ -57,6 +57,7 @@ class StockPickerAgent(BaseAgent):
         available_cash = context.get("available_cash", 0)
         max_buy = context.get("max_buy_amount", 1_000_000)
         quotes = context.get("quotes", [])
+        tendency_directive = context.get("tendency_directive", "")
 
         quotes_text = "\n".join(
             f"- {q['symbol']} {q['name']}: {q['current_price']:,}원 "
@@ -64,8 +65,10 @@ class StockPickerAgent(BaseAgent):
             for q in quotes
         )
 
-        prompt = f"""섹터 거시 분석과 후보 종목 시세를 검토하여 매매 전략을 수립해주세요.
+        tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
+        prompt = f"""섹터 거시 분석과 후보 종목 시세를 검토하여 매매 전략을 수립해주세요.
+{tendency_section}
 [섹터 거시 분석]
 {json.dumps(analysis, ensure_ascii=False, indent=2)}
 

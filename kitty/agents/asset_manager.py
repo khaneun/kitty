@@ -77,8 +77,11 @@ class AssetManagerAgent(BaseAgent):
             f"({q['change_rate']:+.2f}%)"
             for q in quotes
         )
+        tendency_directive = context.get("tendency_directive", "")
+        tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
         prompt = f"""보유 종목 평가 결과와 신규 매수 후보를 종합하여 최종 실행 주문 목록을 결정해주세요.
+{tendency_section}
 
 [보유 종목 평가 (종목평가가 결과)]
 {json.dumps(stock_evaluation, ensure_ascii=False, indent=2)}

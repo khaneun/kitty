@@ -37,7 +37,7 @@ TG_CHAT       = os.getenv("TELEGRAM_CHAT_ID",   "")
 BURST_WINDOW  = 300
 BURST_THRESH  = 3
 
-AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가"]
+AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가", "투자성향관리자"]
 
 # 모델별 비용 (USD / 1M 토큰)
 _COST: dict[str, tuple[float, float]] = {
@@ -809,6 +809,7 @@ table.log tr:hover td{background:#161b22}
       <option value="자산운용가">자산운용가</option>
       <option value="매수실행가">매수실행가</option>
       <option value="매도실행가">매도실행가</option>
+      <option value="투자성향관리자">투자성향관리자</option>
     </select>
     <div class="chat-history" id="chat-history">
       <div style="text-align:center;color:#484f58;font-size:12px;padding:20px">에이전트를 선택하고 질문해보세요.<br>예: "왜 그런 판단을 했나요?", "분석 근거를 설명해줘"</div>

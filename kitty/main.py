@@ -21,6 +21,7 @@ from kitty.agents import (
     SellExecutorAgent,
     StockEvaluatorAgent,
     StockPickerAgent,
+    TendencyAgent,
 )
 from kitty.broker import KISBroker
 from kitty.config import settings
@@ -128,12 +129,18 @@ async def run_trading_cycle(
     asset_manager: AssetManagerAgent,
     buy_executor: BuyExecutorAgent,
     sell_executor: SellExecutorAgent,
+    tendency_agent: TendencyAgent,
     reporter: TelegramReporter,
     daily_report: DailyReport,
 ) -> None:
     """매매 사이클 1회 실행"""
     logger.info("=== 매매 사이클 시작 ===")
     daily_report.begin_cycle()
+
+    # 0. 투자 성향 디렉티브 생성 (AI 호출 없음)
+    tendency_directive = tendency_agent.get_directive()
+    logger.info(f"[투자성향] {tendency_agent.profile['label']}")
+    _save_agent_context("투자성향관리자", tendency_agent.profile)
 
     # 1. 잔고 + 가용현금 조회
     balance_data = await broker.get_balance()
@@ -175,6 +182,7 @@ async def run_trading_cycle(
         "quotes": quotes,
         "sector_analysis": analysis,
         "max_buy_amount": settings.max_buy_amount,
+        "tendency_directive": tendency_directive,
     })
     daily_report.record_stock_evaluation(stock_evaluation)
     reporter.update_evaluation(stock_evaluation)
@@ -187,6 +195,7 @@ async def run_trading_cycle(
         "portfolio": portfolio,
         "available_cash": available_cash,
         "max_buy_amount": settings.max_buy_amount,
+        "tendency_directive": tendency_directive,
     })
     daily_report.record_stock_picks(new_candidates)
     _save_agent_context("종목발굴가", new_candidates)
@@ -200,6 +209,7 @@ async def run_trading_cycle(
         "available_cash": available_cash,
         "total_asset_value": total_asset_value,
         "max_buy_amount": settings.max_buy_amount,
+        "tendency_directive": tendency_directive,
     })
     daily_report.record_asset_management(asset_plan)
     _save_agent_context("자산운용가", asset_plan)
@@ -274,6 +284,7 @@ async def main() -> None:
     asset_manager = AssetManagerAgent()
     buy_executor = BuyExecutorAgent(broker)
     sell_executor = SellExecutorAgent(broker)
+    tendency_agent = TendencyAgent(profile_name="aggressive")
 
     reporter = TelegramReporter().build()
     reporter.set_broker(broker)
@@ -289,6 +300,7 @@ async def main() -> None:
             asset_manager,
             buy_executor,
             sell_executor,
+            tendency_agent,
             reporter,
             daily_report,
         )
@@ -304,6 +316,7 @@ async def main() -> None:
         "자산운용가": asset_manager,
         "매수실행가": buy_executor,
         "매도실행가": sell_executor,
+        "투자성향관리자": tendency_agent,
     }
     asyncio.create_task(_chat_handler(_agents_map))
 
@@ -364,7 +377,8 @@ async def main() -> None:
                     if results:
                         # 에이전트 system_prompt 즉시 갱신
                         for agent in [sector_analyst, stock_evaluator, stock_picker,
-                                      asset_manager, buy_executor, sell_executor]:
+                                      asset_manager, buy_executor, sell_executor,
+                                      tendency_agent]:
                             agent.reload_feedback()
                         await reporter.send(_format_eval_summary(results))
                 except Exception as e:
@@ -383,6 +397,7 @@ async def main() -> None:
                         asset_manager,
                         buy_executor,
                         sell_executor,
+                        tendency_agent,
                         reporter,
                         daily_report,
                     )

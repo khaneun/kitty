@@ -71,6 +71,7 @@ class StockEvaluatorAgent(BaseAgent):
         quotes = context.get("quotes", [])
         sector_analysis = context.get("sector_analysis", {})
         max_buy = context.get("max_buy_amount", 1_000_000)
+        tendency_directive = context.get("tendency_directive", "")
 
         quote_map = {q["symbol"]: q for q in quotes}
 
@@ -99,8 +100,10 @@ class StockEvaluatorAgent(BaseAgent):
                 "change_rate_today": quote.get("change_rate", 0),
             })
 
-        prompt = f"""현재 보유 종목을 평가하여 각 종목의 처리 방향을 결정해주세요.
+        tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
+        prompt = f"""현재 보유 종목을 평가하여 각 종목의 처리 방향을 결정해주세요.
+{tendency_section}
 [보유 종목 현황]
 {json.dumps(holdings_info, ensure_ascii=False, indent=2)}
 
