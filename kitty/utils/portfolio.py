@@ -1,10 +1,15 @@
 """포트폴리오 및 잔고 조회 유틸리티"""
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .logger import logger
 
 if TYPE_CHECKING:
     from kitty.broker import KISBroker
+
+_SNAPSHOT_PATH = Path("logs/portfolio_snapshot.json")
 
 
 async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> None:
@@ -25,6 +30,7 @@ async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> N
         logger.info(f"{prefix}💰 잔고  |  주문가능: {available_cash:>14,}원  |  총평가: {total_eval:>14,}원  |  평가손익: {total_pnl:>+,}원")
 
         # ── 보유 종목 ──────────────────────────────────────────
+        holding_list = []
         if not holdings:
             logger.info(f"{prefix}📭 보유 종목 없음")
         else:
@@ -43,8 +49,31 @@ async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> N
                     f"{prefix}{symbol:<8}  {name:<14}  {qty:>6,}주  {avg:>10,}원  "
                     f"{cur:>10,}원  {arrow}{abs(pnl_rt):>6.2f}%  {eval_amt:>12,}원"
                 )
+                holding_list.append({
+                    "symbol":   symbol,
+                    "name":     h.get("prdt_name", ""),
+                    "qty":      qty,
+                    "avg":      avg,
+                    "current":  cur,
+                    "eval_amt": eval_amt,
+                    "pnl_rt":   pnl_rt,
+                })
 
         logger.info(f"{prefix}{'─' * 50}")
+
+        # ── 스냅샷 저장 (monitor가 읽음) ───────────────────────
+        try:
+            snapshot = {
+                "ts":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "available_cash": available_cash,
+                "total_eval":    total_eval,
+                "total_pnl":     total_pnl,
+                "holdings":      holding_list,
+            }
+            _SNAPSHOT_PATH.parent.mkdir(exist_ok=True)
+            _SNAPSHOT_PATH.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"포트폴리오 스냅샷 저장 실패: {e}")
 
     except Exception as e:
         logger.error(f"{prefix}포트폴리오 조회 실패: {e}")

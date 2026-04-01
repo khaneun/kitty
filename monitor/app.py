@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse
 LOG_DIR       = Path(os.getenv("LOG_DIR",       "/logs"))
 FEEDBACK_DIR  = Path(os.getenv("FEEDBACK_DIR",  "/feedback"))
 TOKEN_DIR     = Path(os.getenv("TOKEN_DIR",      "/token_usage"))
+PORTFOLIO_SNAPSHOT = LOG_DIR / "portfolio_snapshot.json"
 DB_PATH       = Path(os.getenv("DB_PATH",        "/data/monitor.db"))
 PASSWORD      = os.getenv("MONITOR_PASSWORD", "kitty")
 POLL_SEC      = int(os.getenv("POLL_SEC",      "15"))
@@ -355,6 +356,18 @@ def api_stats(req: Request):
     }
 
 
+@app.get("/api/portfolio")
+def api_portfolio(req: Request):
+    """logs/portfolio_snapshot.json 에서 최신 포트폴리오 반환"""
+    _auth(req)
+    if not PORTFOLIO_SNAPSHOT.exists():
+        return {"ts": None, "holdings": [], "available_cash": 0, "total_eval": 0, "total_pnl": 0}
+    try:
+        return json.loads(PORTFOLIO_SNAPSHOT.read_text(encoding="utf-8"))
+    except Exception:
+        return {"ts": None, "holdings": [], "available_cash": 0, "total_eval": 0, "total_pnl": 0}
+
+
 @app.get("/api/agent-scores")
 def api_agent_scores(req: Request):
     """feedback/*.json 파일에서 에이전트별 일일 평가 점수 반환 (최근 14일)"""
@@ -514,6 +527,17 @@ header{background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;disp
 .s-bar-track{flex:1;height:8px;background:#21262d;border-radius:2px;overflow:hidden}
 .s-bar-fill{height:100%;border-radius:2px;transition:width .3s}
 .s-bar-n{font-size:9px;color:#8b949e;width:14px;flex-shrink:0;text-align:right}
+/* 포트폴리오 테이블 */
+.pf-wrap{overflow-x:auto;border:1px solid #30363d;border-radius:8px;margin-bottom:14px}
+table.pf{width:100%;border-collapse:collapse;font-size:12px;min-width:420px}
+table.pf th{background:#161b22;padding:7px 10px;text-align:right;color:#8b949e;font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600;border-bottom:1px solid #30363d}
+table.pf th:first-child{text-align:left}
+table.pf td{padding:7px 10px;border-bottom:1px solid #161b22;text-align:right;vertical-align:middle}
+table.pf td:first-child{text-align:left}
+table.pf tr:last-child td{border-bottom:none}
+table.pf tr:hover td{background:#161b22}
+.pf-name{font-weight:600;color:#f0f6fc;font-size:12px}
+.pf-sym{font-size:10px;color:#8b949e}
 /* 히트맵 */
 .heatmap-wrap{overflow-x:auto;border-radius:8px;border:1px solid #30363d}
 .heatmap{width:100%;border-collapse:collapse;font-size:12px}
@@ -633,6 +657,24 @@ table.log tr:hover td{background:#161b22}
 <!-- ══ 에이전트 성적표 탭 ══ -->
 <div id="tab-agents" class="tab-content">
 <div class="wrap">
+  <!-- 포트폴리오 현황 -->
+  <div class="section">
+    <div class="sec-title">현재 포트폴리오</div>
+    <div class="cards" id="pf-summary-cards" style="margin-bottom:10px">
+      <div class="card"><div class="num blue"  id="pf-total-eval">-</div><div class="lbl">총평가금액</div></div>
+      <div class="card"><div class="num"       id="pf-total-pnl">-</div><div class="lbl">평가손익</div></div>
+      <div class="card"><div class="num gray"  id="pf-cash">-</div><div class="lbl">주문가능현금</div></div>
+    </div>
+    <div class="pf-wrap">
+      <table class="pf">
+        <thead><tr>
+          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률</th><th>평가금액</th>
+        </tr></thead>
+        <tbody id="pf-tbody"><tr><td colspan="6" class="empty">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
+    <div style="font-size:10px;color:#484f58;margin-top:6px;text-align:right" id="pf-ts"></div>
+  </div>
   <div class="agent-grid" id="agent-cards"></div>
   <div class="section">
     <div class="sec-title">일별 점수 히트맵</div>
@@ -686,7 +728,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(c=>{
     c.classList.toggle('active', c.id==='tab-'+name);
   });
-  if(name==='agents') loadAgentScores();
+  if(name==='agents'){ loadPortfolio(); loadAgentScores(); }
   if(name==='tokens') loadTokens();
 }
 
@@ -793,6 +835,40 @@ function clearFilter(){
   document.getElementById('f-level').value='';
   document.getElementById('f-q').value='';
   loadErrors();
+}
+
+// ── 포트폴리오 탭 ────────────────────────────────────────
+async function loadPortfolio() {
+  try {
+    const d = await fetch('/api/portfolio').then(r=>r.json());
+    const fmtW = n => n.toLocaleString('ko-KR')+'원';
+    const pnlColor = n => n>=0?'#3fb950':'#f85149';
+
+    document.getElementById('pf-total-eval').textContent = d.total_eval ? fmtW(d.total_eval) : '-';
+    const pnlEl = document.getElementById('pf-total-pnl');
+    pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtW(d.total_pnl) : '-';
+    pnlEl.style.color = pnlColor(d.total_pnl||0);
+    document.getElementById('pf-cash').textContent = d.available_cash ? fmtW(d.available_cash) : '-';
+    document.getElementById('pf-ts').textContent = d.ts ? '기준: '+d.ts : '';
+
+    const tbody = document.getElementById('pf-tbody');
+    if(!d.holdings || !d.holdings.length){
+      tbody.innerHTML='<tr><td colspan="6" class="empty">보유 종목 없음</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.holdings.map(h=>{
+      const color = pnlColor(h.pnl_rt);
+      const arrow = h.pnl_rt>=0?'▲':'▼';
+      return `<tr>
+        <td><div class="pf-name">${esc(h.name)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
+        <td>${h.qty.toLocaleString()}주</td>
+        <td>${h.avg.toLocaleString()}원</td>
+        <td>${h.current.toLocaleString()}원</td>
+        <td style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
+        <td style="color:${color}">${h.eval_amt.toLocaleString()}원</td>
+      </tr>`;
+    }).join('');
+  } catch(e){ console.error('portfolio',e); }
 }
 
 // ── 에이전트 성적표 탭 ─────────────────────────────────
@@ -910,7 +986,7 @@ loadStats();
 loadErrors();
 setInterval(()=>{ loadHealth(); loadStats(); loadErrors(); }, 30000);
 setInterval(()=>{
-  if(document.getElementById('tab-agents').classList.contains('active')) loadAgentScores();
+  if(document.getElementById('tab-agents').classList.contains('active')){ loadPortfolio(); loadAgentScores(); }
   if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
 }, 60000);
 </script>
