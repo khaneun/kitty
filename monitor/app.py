@@ -26,6 +26,7 @@ LOG_DIR       = Path(os.getenv("LOG_DIR",       "/logs"))
 FEEDBACK_DIR  = Path(os.getenv("FEEDBACK_DIR",  "/feedback"))
 TOKEN_DIR     = Path(os.getenv("TOKEN_DIR",      "/token_usage"))
 PORTFOLIO_SNAPSHOT = LOG_DIR / "portfolio_snapshot.json"
+AGENT_CONTEXT     = LOG_DIR / "agent_context.json"
 CMD_DIR  = Path(os.getenv("CMD_DIR", "/commands"))
 MODE_REQ = CMD_DIR / "mode_request.json"
 DB_PATH       = Path(os.getenv("DB_PATH",        "/data/monitor.db"))
@@ -372,6 +373,21 @@ def api_portfolio(req: Request):
                 "available_cash": 0, "total_eval": 0, "total_pnl": 0}
 
 
+@app.get("/api/tendency")
+def api_tendency(req: Request):
+    """logs/agent_context.json 에서 투자성향관리자 현재 성향 반환"""
+    _auth(req)
+    if not AGENT_CONTEXT.exists():
+        return {"profile_name": None}
+    try:
+        ctx = json.loads(AGENT_CONTEXT.read_text(encoding="utf-8"))
+        entry = ctx.get("투자성향관리자", {})
+        output = entry.get("output", {})
+        return {"ts": entry.get("ts"), **output}
+    except Exception:
+        return {"profile_name": None}
+
+
 @app.post("/api/chat")
 async def api_chat(req: Request):
     """채팅 요청 → commands/chat/req_{id}.json 기록 후 id 반환"""
@@ -650,6 +666,17 @@ table.log tr:hover td{background:#161b22}
 .recent-err:last-child{border-bottom:none}
 .recent-err .ts{color:#484f58;flex-shrink:0;white-space:nowrap}
 .recent-err .msg{color:#c9d1d9;word-break:break-word}
+/* 투자 성향 카드 */
+.tendency-card{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:8px;margin-bottom:14px}
+.tendency-badge{flex-shrink:0;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.3px}
+.t-aggressive{background:#2d1b00;color:#f0883e;border:1px solid #5c3a00}
+.t-balanced{background:#0d2d3d;color:#58a6ff;border:1px solid #1a4a6e}
+.t-conservative{background:#1a2a1a;color:#3fb950;border:1px solid #2a4a2a}
+.tendency-info{flex:1;min-width:0}
+.tendency-desc{font-size:12px;color:#8b949e;line-height:1.5;margin-top:2px}
+.tendency-params{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap}
+.tendency-param{font-size:10px;color:#484f58}
+.tendency-param span{color:#c9d1d9;font-weight:600}
 /* 서브탭 (관리 영역) */
 .subtabs{display:flex;background:#0d1117;border-bottom:1px solid #21262d;position:sticky;top:83px;z-index:98;overflow-x:auto}
 .subtab{padding:7px 16px;font-size:11px;color:#484f58;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0;letter-spacing:.3px}
@@ -764,6 +791,19 @@ body{padding-bottom:80px}
 <!-- ══ 에이전트 성적표 (메인) ══ -->
 <div id="tab-agents" class="tab-content active">
 <div class="wrap">
+  <!-- 투자 성향 -->
+  <div id="tendency-card" class="tendency-card" style="display:none">
+    <span id="td-badge" class="tendency-badge">-</span>
+    <div class="tendency-info">
+      <div id="td-desc" class="tendency-desc">-</div>
+      <div class="tendency-params">
+        <div class="tendency-param">익절 <span id="td-tp">-</span></div>
+        <div class="tendency-param">손절 <span id="td-sl">-</span></div>
+        <div class="tendency-param">현금 <span id="td-cash">-</span></div>
+        <div class="tendency-param">종목 최대 <span id="td-wt">-</span></div>
+      </div>
+    </div>
+  </div>
   <!-- 포트폴리오 현황 -->
   <div class="section">
     <div class="sec-title">현재 포트폴리오</div>
@@ -876,7 +916,7 @@ function switchMain(name) {
   });
   if(isAgents) {
     document.getElementById('tab-agents').classList.add('active');
-    loadPortfolio(); loadAgentScores();
+    loadTendency(); loadPortfolio(); loadAgentScores();
   } else {
     switchAdmin(_adminTab);
   }
@@ -1039,6 +1079,24 @@ async function onModeChange(newMode) {
 
 function updateModeStyle(sel, mode) {
   sel.className = 'gnb-select ' + (mode==='live'?'mode-live':'mode-paper');
+}
+
+// ── 투자 성향 카드 ───────────────────────────────────────
+async function loadTendency() {
+  try {
+    const d = await fetch('/api/tendency').then(r=>r.json());
+    if(!d.profile_name) return;
+    const card = document.getElementById('tendency-card');
+    card.style.display = 'flex';
+    const badge = document.getElementById('td-badge');
+    badge.textContent = d.label || d.profile_name;
+    badge.className = 'tendency-badge t-' + d.profile_name;
+    document.getElementById('td-desc').textContent = d.description || '';
+    document.getElementById('td-tp').textContent   = d.take_profit_pct != null ? '+'+d.take_profit_pct+'%' : '-';
+    document.getElementById('td-sl').textContent   = d.stop_loss_pct  != null ? d.stop_loss_pct+'%'       : '-';
+    document.getElementById('td-cash').textContent = d.cash_reserve_min != null ? Math.round(d.cash_reserve_min*100)+'%이상' : '-';
+    document.getElementById('td-wt').textContent   = d.max_weight_pct != null ? d.max_weight_pct+'%'      : '-';
+  } catch(e){ console.error('tendency',e); }
 }
 
 // ── 포트폴리오 탭 ────────────────────────────────────────
@@ -1296,6 +1354,7 @@ async function pollChatResponse(id, agent) {
 
 // ── 초기화 & 자동 갱신 ──────────────────────────────────
 // 기본 뷰: 성적표
+loadTendency();
 loadPortfolio();
 loadAgentScores();
 
