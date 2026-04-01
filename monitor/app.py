@@ -38,7 +38,7 @@ TG_CHAT       = os.getenv("TELEGRAM_CHAT_ID",   "")
 BURST_WINDOW  = 300
 BURST_THRESH  = 3
 
-AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가", "투자성향관리자"]
+AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가"]
 
 # 모델별 비용 (USD / 1M 토큰)
 _COST: dict[str, tuple[float, float]] = {
@@ -1120,6 +1120,7 @@ async function loadPortfolio() {
     pnlEl.style.color = pnlColor(d.total_pnl||0);
     document.getElementById('pf-cash').textContent = d.available_cash ? fmtW(d.available_cash) : '-';
     document.getElementById('pf-ts').textContent = d.ts ? '기준: '+d.ts : '';
+    if(d.ts) document.getElementById('upd-txt').textContent = '갱신 '+d.ts.slice(5,16);
 
     const tbody = document.getElementById('pf-tbody');
     if(!d.holdings || !d.holdings.length){
