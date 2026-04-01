@@ -40,12 +40,15 @@ docker build -t kitty-trader .
 mkdir -p /home/ec2-user/kitty/feedback
 mkdir -p /home/ec2-user/kitty/logs
 
+mkdir -p /home/ec2-user/kitty/token_usage
+
 docker run -d \
   --name kitty-trader \
   --restart unless-stopped \
   --env-file /home/ec2-user/kitty/.env \
   -v /home/ec2-user/kitty/logs:/app/logs \
   -v /home/ec2-user/kitty/feedback:/app/feedback \
+  -v /home/ec2-user/kitty/token_usage:/app/token_usage \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /home/ec2-user/kitty:/host/kitty \
   kitty-trader
@@ -67,6 +70,7 @@ docker run -d \
   --restart unless-stopped \
   -v /home/ec2-user/kitty/logs:/logs:ro \
   -v /home/ec2-user/kitty/feedback:/feedback:ro \
+  -v /home/ec2-user/kitty/token_usage:/token_usage:ro \
   -v /home/ec2-user/kitty/monitor-data:/data \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \

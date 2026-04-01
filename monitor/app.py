@@ -1,4 +1,4 @@
-"""Kitty 에러 로그 모니터 — FastAPI + SQLite + 모바일 대시보드
+"""Kitty 모니터 — FastAPI + SQLite + 4탭 모바일 대시보드
 
 수집 대상: /logs/kitty_YYYY-MM-DD.log 파일의 ERROR / WARNING / CRITICAL 라인
 저장소   : /data/monitor.db (SQLite, 30일 보관)
@@ -22,27 +22,47 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 
 # ── 환경변수 ─────────────────────────────────────────────────────────────────
-LOG_DIR      = Path(os.getenv("LOG_DIR",      "/logs"))
-FEEDBACK_DIR = Path(os.getenv("FEEDBACK_DIR", "/feedback"))
-DB_PATH      = Path(os.getenv("DB_PATH",      "/data/monitor.db"))
-PASSWORD     = os.getenv("MONITOR_PASSWORD", "kitty")
-POLL_SEC     = int(os.getenv("POLL_SEC",     "15"))
-RETAIN_DAYS  = int(os.getenv("RETAIN_DAYS",  "30"))
-TG_TOKEN     = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT      = os.getenv("TELEGRAM_CHAT_ID",   "")
-BURST_WINDOW = 300
-BURST_THRESH = 3
+LOG_DIR       = Path(os.getenv("LOG_DIR",       "/logs"))
+FEEDBACK_DIR  = Path(os.getenv("FEEDBACK_DIR",  "/feedback"))
+TOKEN_DIR     = Path(os.getenv("TOKEN_DIR",      "/token_usage"))
+DB_PATH       = Path(os.getenv("DB_PATH",        "/data/monitor.db"))
+PASSWORD      = os.getenv("MONITOR_PASSWORD", "kitty")
+POLL_SEC      = int(os.getenv("POLL_SEC",      "15"))
+RETAIN_DAYS   = int(os.getenv("RETAIN_DAYS",   "30"))
+TG_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TG_CHAT       = os.getenv("TELEGRAM_CHAT_ID",   "")
+BURST_WINDOW  = 300
+BURST_THRESH  = 3
 
-# 에이전트 목록 (feedback/*.json 파일명과 일치)
 AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가"]
 
+# 모델별 비용 (USD / 1M 토큰)
+_COST: dict[str, tuple[float, float]] = {
+    "gpt-4o":               (2.50,  10.00),
+    "gpt-4o-mini":          (0.15,   0.60),
+    "gpt-4-turbo":          (10.00,  30.00),
+    "claude-opus-4-6":      (15.00,  75.00),
+    "claude-sonnet-4-6":    (3.00,   15.00),
+    "claude-haiku-4-5":     (0.80,   4.00),
+    "gemini-1.5-pro":       (1.25,   5.00),
+    "gemini-1.5-flash":     (0.075,  0.30),
+    "gemini-2.0-flash":     (0.10,   0.40),
+}
+
+def _cost_usd(model: str, in_tok: int, out_tok: int) -> float:
+    key = next((k for k in _COST if model.startswith(k)), None)
+    if key is None:
+        return 0.0
+    ci, co = _COST[key]
+    return (in_tok * ci + out_tok * co) / 1_000_000
+
 # ── 로그 파싱 정규식 ──────────────────────────────────────────────────────────
-# 2026-04-01 16:08:00.604 | ERROR     | kitty.broker.kis:_get_token:74 - 메시지
 _RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+"
     r" \| (ERROR|WARNING|CRITICAL)\s+"
     r"\| (\S+) - (.+)$"
 )
+_RE_ANY = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+")
 
 # ── SQLite ───────────────────────────────────────────────────────────────────
 
@@ -123,6 +143,24 @@ def scan_file(path: Path, conn: sqlite3.Connection) -> list[dict]:
     )
     conn.commit()
     return entries
+
+
+def _last_log_ts() -> Optional[str]:
+    """가장 최근 로그 라인의 타임스탬프 (모든 레벨)"""
+    latest = None
+    for path in sorted(LOG_DIR.glob("kitty_*.log"), reverse=True)[:2]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for line in reversed(text.splitlines()):
+                m = _RE_ANY.match(line)
+                if m:
+                    ts = m.group(1)
+                    if latest is None or ts > latest:
+                        latest = ts
+                    break
+        except OSError:
+            pass
+    return latest
 
 
 # ── 텔레그램 알림 ─────────────────────────────────────────────────────────────
@@ -227,6 +265,44 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/health")
+def api_health(req: Request):
+    """헬스 상태: 에러 건수, 최근 로그 시각, 최근 에러 5건"""
+    _auth(req)
+    today = datetime.now().strftime("%Y-%m-%d")
+    hour_ago = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    with _db() as c:
+        err_today  = c.execute(
+            "SELECT COUNT(*) FROM errors WHERE date=? AND level IN ('ERROR','CRITICAL')", (today,)
+        ).fetchone()[0]
+        warn_today = c.execute(
+            "SELECT COUNT(*) FROM errors WHERE date=? AND level='WARNING'", (today,)
+        ).fetchone()[0]
+        err_1h = c.execute(
+            "SELECT COUNT(*) FROM errors WHERE ts>=? AND level IN ('ERROR','CRITICAL')", (hour_ago,)
+        ).fetchone()[0]
+        recent = c.execute(
+            "SELECT ts,level,module,message FROM errors ORDER BY ts DESC LIMIT 5"
+        ).fetchall()
+
+    if err_1h >= 5:
+        status = "critical"
+    elif err_1h >= 2:
+        status = "warning"
+    else:
+        status = "ok"
+
+    last_log = _last_log_ts()
+    return {
+        "status":      status,
+        "err_today":   err_today,
+        "warn_today":  warn_today,
+        "err_1h":      err_1h,
+        "last_log_ts": last_log,
+        "recent":      [dict(r) for r in recent],
+    }
+
+
 @app.get("/api/errors")
 def api_errors(
     req: Request,
@@ -290,7 +366,6 @@ def api_agent_scores(req: Request):
         if path.exists():
             try:
                 entries = json.loads(path.read_text(encoding="utf-8"))
-                # 날짜순 정렬 후 최근 14개
                 sorted_entries = sorted(entries, key=lambda x: x.get("date", ""))[-14:]
                 result[agent] = [
                     {
@@ -306,6 +381,73 @@ def api_agent_scores(req: Request):
         else:
             result[agent] = []
     return result
+
+
+@app.get("/api/token-usage")
+def api_token_usage(req: Request):
+    """token_usage/YYYY-MM-DD.json 파일에서 최근 14일치 토큰 사용량 반환"""
+    _auth(req)
+    today = datetime.now().strftime("%Y-%m-%d")
+    dates = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+
+    daily: dict[str, dict] = {}       # date → {in, out, cost}
+    by_agent: dict[str, dict] = {}    # agent → {in, out, cost}
+    today_summary: dict = {"in": 0, "out": 0, "cost": 0.0, "by_agent": {}}
+
+    for date in dates:
+        path = TOKEN_DIR / f"{date}.json"
+        if not path.exists():
+            daily[date] = {"in": 0, "out": 0, "cost": 0.0}
+            continue
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            daily[date] = {"in": 0, "out": 0, "cost": 0.0}
+            continue
+
+        d_in = d_out = 0
+        d_cost = 0.0
+        for e in entries:
+            in_t  = int(e.get("input_tokens",  0))
+            out_t = int(e.get("output_tokens", 0))
+            model = e.get("model", "")
+            cost  = _cost_usd(model, in_t, out_t)
+            agent = e.get("agent", "unknown")
+
+            d_in   += in_t
+            d_out  += out_t
+            d_cost += cost
+
+            if agent not in by_agent:
+                by_agent[agent] = {"in": 0, "out": 0, "cost": 0.0}
+            by_agent[agent]["in"]   += in_t
+            by_agent[agent]["out"]  += out_t
+            by_agent[agent]["cost"] += cost
+
+            if date == today:
+                if agent not in today_summary["by_agent"]:
+                    today_summary["by_agent"][agent] = {"in": 0, "out": 0, "cost": 0.0}
+                today_summary["by_agent"][agent]["in"]   += in_t
+                today_summary["by_agent"][agent]["out"]  += out_t
+                today_summary["by_agent"][agent]["cost"] += cost
+
+        daily[date] = {"in": d_in, "out": d_out, "cost": round(d_cost, 4)}
+        if date == today:
+            today_summary["in"]   = d_in
+            today_summary["out"]  = d_out
+            today_summary["cost"] = round(d_cost, 4)
+
+    # cost 반올림
+    for v in by_agent.values():
+        v["cost"] = round(v["cost"], 4)
+
+    return {
+        "dates":         dates,
+        "daily":         daily,
+        "by_agent":      by_agent,
+        "today":         today_summary,
+        "today_date":    today,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -325,34 +467,41 @@ _HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px}
-/* 헤더 */
 header{background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
 .logo{font-size:15px;font-weight:700;color:#f0f6fc}
 .upd{font-size:11px;color:#8b949e;display:flex;align-items:center;gap:5px}
 .dot{width:7px;height:7px;border-radius:50%;background:#3fb950;animation:blink 2s infinite;flex-shrink:0}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 /* 탭 */
-.tabs{display:flex;border-bottom:1px solid #30363d;background:#161b22;position:sticky;top:41px;z-index:99}
-.tab{padding:10px 18px;font-size:13px;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.tabs{display:flex;border-bottom:1px solid #30363d;background:#161b22;position:sticky;top:41px;z-index:99;overflow-x:auto}
+.tab{padding:10px 14px;font-size:12px;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0}
 .tab.active{color:#f0f6fc;border-bottom-color:#58a6ff}
 .tab-content{display:none}.tab-content.active{display:block}
 /* 공통 */
 .wrap{padding:12px 14px;max-width:860px;margin:0 auto}
 .section{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:14px}
 .sec-title{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:600}
-/* 요약 카드 */
+/* 카드 그리드 */
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.cards-2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 8px;text-align:center}
 .card .num{font-size:26px;font-weight:700;line-height:1}
 .card .lbl{font-size:10px;color:#8b949e;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
-.red{color:#f85149}.yellow{color:#d29922}.blue{color:#58a6ff}.green{color:#3fb950}
-/* 에러 바 차트 */
+.card .sub{font-size:10px;color:#484f58;margin-top:2px}
+.red{color:#f85149}.yellow{color:#d29922}.blue{color:#58a6ff}.green{color:#3fb950}.gray{color:#8b949e}
+/* 상태 배지 */
+.status-badge{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:8px;font-weight:700;font-size:15px;margin-bottom:14px;width:100%}
+.status-ok{background:#0d3321;color:#3fb950;border:1px solid #1a5c36}
+.status-warning{background:#2d2500;color:#d29922;border:1px solid #5c4a00}
+.status-critical{background:#2d1010;color:#f85149;border:1px solid #5c1010}
+/* 바 차트 */
 .bar-row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
 .bar-dt{width:42px;color:#8b949e;flex-shrink:0;text-align:right;font-size:10px}
 .bar-track{flex:1;height:11px;background:#21262d;border-radius:3px;display:flex;overflow:hidden}
 .bar-e{background:#f85149;height:100%}.bar-w{background:#d29922;height:100%}
-.bar-n{width:26px;text-align:right;color:#8b949e;flex-shrink:0;font-size:10px}
-/* 에이전트 점수 그리드 */
+.bar-in{background:#58a6ff;height:100%}.bar-out{background:#3fb950;height:100%}
+.bar-n{width:34px;text-align:right;color:#8b949e;flex-shrink:0;font-size:10px}
+/* 에이전트 성과 그리드 */
 .agent-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
 @media(min-width:600px){.agent-grid{grid-template-columns:repeat(3,1fr)}}
 .agent-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 12px}
@@ -365,7 +514,7 @@ header{background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;disp
 .s-bar-track{flex:1;height:8px;background:#21262d;border-radius:2px;overflow:hidden}
 .s-bar-fill{height:100%;border-radius:2px;transition:width .3s}
 .s-bar-n{font-size:9px;color:#8b949e;width:14px;flex-shrink:0;text-align:right}
-/* 에이전트 히트맵 테이블 */
+/* 히트맵 */
 .heatmap-wrap{overflow-x:auto;border-radius:8px;border:1px solid #30363d}
 .heatmap{width:100%;border-collapse:collapse;font-size:12px}
 .heatmap th{background:#161b22;padding:7px 10px;text-align:center;color:#8b949e;font-size:10px;font-weight:600;white-space:nowrap;border-bottom:1px solid #30363d}
@@ -373,10 +522,7 @@ header{background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;disp
 .heatmap td{padding:6px 8px;text-align:center;border-bottom:1px solid #0d1117;font-size:12px;font-weight:700}
 .heatmap td:first-child{text-align:left;font-size:11px;color:#8b949e;white-space:nowrap;font-weight:400;padding-left:10px}
 .heatmap tr:last-child td{border-bottom:none}
-.s-hi{background:#0d3321;color:#3fb950}
-.s-mid{background:#2d2500;color:#d29922}
-.s-lo{background:#2d1010;color:#f85149}
-.s-none{color:#484f58}
+.s-hi{background:#0d3321;color:#3fb950}.s-mid{background:#2d2500;color:#d29922}.s-lo{background:#2d1010;color:#f85149}.s-none{color:#484f58}
 /* 에러 테이블 */
 .filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
 .filters input,.filters select{background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:7px 10px;font-size:13px;flex:1;min-width:70px;outline:none}
@@ -397,6 +543,12 @@ table.log tr:hover td{background:#161b22}
 .msg-col:hover{color:#f0f6fc}
 .meta{font-size:11px;color:#8b949e;margin-bottom:6px}
 .empty{text-align:center;color:#484f58;padding:32px;font-size:13px}
+/* 토큰 에이전트 바 */
+.tok-bar-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.tok-name{width:70px;font-size:11px;color:#8b949e;flex-shrink:0;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+.tok-track{flex:1;height:14px;background:#21262d;border-radius:3px;display:flex;overflow:hidden}
+.tok-in{background:#58a6ff;height:100%}.tok-out{background:#3fb950;height:100%}
+.tok-val{width:70px;text-align:right;font-size:10px;color:#8b949e;flex-shrink:0}
 /* 모달 */
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;padding:16px}
 .modal-bg.show{display:flex}
@@ -404,6 +556,11 @@ table.log tr:hover td{background:#161b22}
 .modal h3{font-size:13px;margin-bottom:10px;color:#f0f6fc}
 .modal pre{font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-all;line-height:1.6}
 .close-btn{float:right;background:none;border:none;color:#8b949e;font-size:18px;cursor:pointer;line-height:1}
+/* 최근 에러 목록 */
+.recent-err{font-size:11px;padding:6px 10px;border-bottom:1px solid #21262d;display:flex;gap:8px;align-items:flex-start}
+.recent-err:last-child{border-bottom:none}
+.recent-err .ts{color:#484f58;flex-shrink:0;white-space:nowrap}
+.recent-err .msg{color:#c9d1d9;word-break:break-word}
 </style>
 </head>
 <body>
@@ -412,19 +569,40 @@ table.log tr:hover td{background:#161b22}
   <div class="upd"><span class="dot"></span><span id="upd-txt">연결 중...</span></div>
 </header>
 
-<!-- 탭 -->
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('errors')">📋 에러 로그</div>
-  <div class="tab" onclick="switchTab('agents')">🤖 에이전트 성과</div>
+  <div class="tab active" onclick="switchTab('health')">🏥 상태</div>
+  <div class="tab" onclick="switchTab('errors')">📋 에러</div>
+  <div class="tab" onclick="switchTab('agents')">🤖 성적표</div>
+  <div class="tab" onclick="switchTab('tokens')">🔢 토큰</div>
+</div>
+
+<!-- ══ 상태 탭 ══ -->
+<div id="tab-health" class="tab-content active">
+<div class="wrap">
+  <div id="status-badge" class="status-badge status-ok">⏳ 로딩 중...</div>
+  <div class="cards">
+    <div class="card"><div class="num red"   id="h-err-today">-</div><div class="lbl">오늘 에러</div></div>
+    <div class="card"><div class="num yellow" id="h-warn-today">-</div><div class="lbl">오늘 경고</div></div>
+    <div class="card"><div class="num red"   id="h-err-1h">-</div><div class="lbl">1시간 에러</div></div>
+  </div>
+  <div class="section">
+    <div class="sec-title">최근 마지막 로그</div>
+    <div id="h-last-log" style="font-size:13px;color:#8b949e;padding:4px 0">-</div>
+  </div>
+  <div class="section">
+    <div class="sec-title">최근 에러 5건</div>
+    <div id="h-recent-errors"><div class="empty">없음 ✅</div></div>
+  </div>
+</div>
 </div>
 
 <!-- ══ 에러 로그 탭 ══ -->
-<div id="tab-errors" class="tab-content active">
+<div id="tab-errors" class="tab-content">
 <div class="wrap">
   <div class="cards">
-    <div class="card"><div class="num red" id="c-err">-</div><div class="lbl">오늘 에러</div></div>
+    <div class="card"><div class="num red"    id="c-err">-</div><div class="lbl">오늘 에러</div></div>
     <div class="card"><div class="num yellow" id="c-warn">-</div><div class="lbl">오늘 경고</div></div>
-    <div class="card"><div class="num blue" id="c-total">-</div><div class="lbl">전체</div></div>
+    <div class="card"><div class="num blue"   id="c-total">-</div><div class="lbl">전체</div></div>
   </div>
   <div class="section">
     <div class="sec-title">14일 에러 추이</div>
@@ -452,16 +630,38 @@ table.log tr:hover td{background:#161b22}
 </div>
 </div>
 
-<!-- ══ 에이전트 성과 탭 ══ -->
+<!-- ══ 에이전트 성적표 탭 ══ -->
 <div id="tab-agents" class="tab-content">
 <div class="wrap">
-  <!-- 에이전트 카드 (최신 점수) -->
   <div class="agent-grid" id="agent-cards"></div>
-  <!-- 히트맵 테이블 -->
   <div class="section">
     <div class="sec-title">일별 점수 히트맵</div>
     <div class="heatmap-wrap">
       <table class="heatmap" id="heatmap"></table>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ══ 토큰 사용량 탭 ══ -->
+<div id="tab-tokens" class="tab-content">
+<div class="wrap">
+  <div class="cards-2">
+    <div class="card"><div class="num blue"  id="tk-in-today">-</div><div class="lbl">오늘 입력 토큰</div></div>
+    <div class="card"><div class="num green" id="tk-out-today">-</div><div class="lbl">오늘 출력 토큰</div></div>
+    <div class="card"><div class="num yellow" id="tk-cost-today">-</div><div class="lbl">오늘 비용 (USD)</div></div>
+    <div class="card"><div class="num gray"  id="tk-cost-14d">-</div><div class="lbl">14일 비용 (USD)</div></div>
+  </div>
+  <div class="section">
+    <div class="sec-title">에이전트별 총 토큰 사용량</div>
+    <div id="tok-agent-bars"></div>
+  </div>
+  <div class="section">
+    <div class="sec-title">14일 일별 토큰 추이</div>
+    <div id="tok-daily-chart"></div>
+    <div style="display:flex;gap:14px;margin-top:8px;font-size:10px;color:#8b949e">
+      <span><span style="display:inline-block;width:10px;height:10px;background:#58a6ff;border-radius:2px;margin-right:4px"></span>입력</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:#3fb950;border-radius:2px;margin-right:4px"></span>출력</span>
     </div>
   </div>
 </div>
@@ -477,18 +677,19 @@ table.log tr:hover td{background:#161b22}
 </div>
 
 <script>
-// ── 탭 ──────────────────────────────────────────────
+const TAB_NAMES = ['health','errors','agents','tokens'];
+
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t,i)=>{
-    t.classList.toggle('active', ['errors','agents'][i]===name);
+    t.classList.toggle('active', TAB_NAMES[i]===name);
   });
   document.querySelectorAll('.tab-content').forEach(c=>{
     c.classList.toggle('active', c.id==='tab-'+name);
   });
   if(name==='agents') loadAgentScores();
+  if(name==='tokens') loadTokens();
 }
 
-// ── 공통 유틸 ────────────────────────────────────────
 const today = new Date().toISOString().slice(0,10);
 document.getElementById('f-date').value = today;
 
@@ -499,13 +700,47 @@ const badge = lvl => {
 };
 const scoreColor = s => s>=7?'#3fb950':s>=4?'#d29922':'#f85149';
 const scoreBg    = s => s>=7?'s-hi':s>=4?'s-mid':'s-lo';
+const fmtNum = n => n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n);
 
-// ── 에러 탭 ─────────────────────────────────────────
+// ── 상태 탭 ─────────────────────────────────────────────
+async function loadHealth() {
+  try {
+    const d = await fetch('/api/health').then(r=>r.json());
+    document.getElementById('h-err-today').textContent  = d.err_today;
+    document.getElementById('h-warn-today').textContent = d.warn_today;
+    document.getElementById('h-err-1h').textContent     = d.err_1h;
+    document.getElementById('h-last-log').textContent   = d.last_log_ts || '로그 없음';
+    if(d.last_log_ts) document.getElementById('upd-txt').textContent = '갱신 '+d.last_log_ts.slice(5,16);
+
+    const badge = document.getElementById('status-badge');
+    const labels = {ok:'✅ 정상 운영 중', warning:'⚠️ 경고 — 에러 증가 중', critical:'🔴 위험 — 에러 다수 발생'};
+    badge.className = 'status-badge status-'+d.status;
+    badge.textContent = labels[d.status] || d.status;
+
+    const el = document.getElementById('h-recent-errors');
+    if(!d.recent || !d.recent.length){
+      el.innerHTML = '<div class="empty">없음 ✅</div>';
+    } else {
+      el.innerHTML = d.recent.map(e=>`
+        <div class="recent-err">
+          <span class="ts">${e.ts.slice(5,16)}</span>
+          ${badge_(e.level)}
+          <span class="msg">${esc(e.message.slice(0,100))}</span>
+        </div>`).join('');
+    }
+  } catch(ex){ console.error('health',ex); }
+}
+function badge_(lvl){
+  const cls=lvl==='ERROR'?'ERR-b':lvl==='WARNING'?'WARN-b':'CRIT-b';
+  return `<span class="badge ${cls}" style="flex-shrink:0">${lvl}</span>`;
+}
+
+// ── 에러 탭 ─────────────────────────────────────────────
 async function loadStats() {
   try {
     const d = await fetch('/api/stats').then(r=>r.json());
-    document.getElementById('c-err').textContent  = (d.today['ERROR']||0)+(d.today['CRITICAL']||0);
-    document.getElementById('c-warn').textContent = d.today['WARNING']||0;
+    document.getElementById('c-err').textContent   = (d.today['ERROR']||0)+(d.today['CRITICAL']||0);
+    document.getElementById('c-warn').textContent  = d.today['WARNING']||0;
     const tot = Object.values(d.totals).reduce((a,v)=>a+v,0);
     document.getElementById('c-total').textContent = tot;
     if(d.latest) document.getElementById('upd-txt').textContent = '갱신 '+d.latest.slice(5,16);
@@ -560,17 +795,14 @@ function clearFilter(){
   loadErrors();
 }
 
-// ── 에이전트 성과 탭 ─────────────────────────────────
+// ── 에이전트 성적표 탭 ─────────────────────────────────
 async function loadAgentScores() {
   try {
     const data = await fetch('/api/agent-scores').then(r=>r.json());
     const agents = Object.keys(data);
     if(!agents.length) return;
-
-    // 전체 날짜 수집 (최근 7일만)
     const allDates = [...new Set(agents.flatMap(a=>data[a].map(e=>e.date)))].sort().slice(-7);
 
-    // ── 에이전트 카드 ──
     document.getElementById('agent-cards').innerHTML = agents.map(agent=>{
       const entries = data[agent];
       if(!entries.length) return `
@@ -581,7 +813,6 @@ async function loadAgentScores() {
         </div>`;
       const latest = entries[entries.length-1];
       const color  = scoreColor(latest.score);
-      // 미니 바 (최근 7개)
       const recent = entries.slice(-7);
       const bars = recent.map(e=>`
         <div class="s-bar-row">
@@ -600,7 +831,6 @@ async function loadAgentScores() {
         </div>`;
     }).join('');
 
-    // ── 히트맵 테이블 ──
     const thead = `<thead><tr><th>에이전트</th>${allDates.map(d=>`<th>${d.slice(5)}</th>`).join('')}</tr></thead>`;
     const tbody = `<tbody>${agents.map(agent=>{
       const scoreMap = Object.fromEntries(data[agent].map(e=>[e.date, e]));
@@ -614,11 +844,53 @@ async function loadAgentScores() {
       return `<tr><td>${agent}</td>${cells}</tr>`;
     }).join('')}</tbody>`;
     document.getElementById('heatmap').innerHTML = thead + tbody;
-
   } catch(e){ console.error('agent-scores',e); }
 }
 
-// ── 모달 ─────────────────────────────────────────────
+// ── 토큰 탭 ─────────────────────────────────────────────
+async function loadTokens() {
+  try {
+    const d = await fetch('/api/token-usage').then(r=>r.json());
+
+    document.getElementById('tk-in-today').textContent   = fmtNum(d.today.in||0);
+    document.getElementById('tk-out-today').textContent  = fmtNum(d.today.out||0);
+    document.getElementById('tk-cost-today').textContent = '$'+(d.today.cost||0).toFixed(4);
+    const total14 = Object.values(d.daily).reduce((a,v)=>a+(v.cost||0),0);
+    document.getElementById('tk-cost-14d').textContent   = '$'+total14.toFixed(4);
+
+    // 에이전트별 바 차트
+    const agents = Object.entries(d.by_agent).sort((a,b)=>(b[1].in+b[1].out)-(a[1].in+a[1].out));
+    const maxTok = Math.max(1,...agents.map(([,v])=>v.in+v.out));
+    document.getElementById('tok-agent-bars').innerHTML = agents.length ? agents.map(([agent,v])=>{
+      const total = v.in + v.out;
+      return `<div class="tok-bar-row">
+        <div class="tok-name" title="${agent}">${agent}</div>
+        <div class="tok-track">
+          <div class="tok-in"  style="width:${v.in/maxTok*100}%"></div>
+          <div class="tok-out" style="width:${v.out/maxTok*100}%"></div>
+        </div>
+        <div class="tok-val">${fmtNum(total)}<span style="color:#484f58;font-size:9px"> $${v.cost.toFixed(3)}</span></div>
+      </div>`;
+    }).join('') : '<div class="empty">토큰 데이터 없음</div>';
+
+    // 14일 일별 추이
+    const maxDayTok = Math.max(1,...d.dates.map(dt=>(d.daily[dt]?.in||0)+(d.daily[dt]?.out||0)));
+    document.getElementById('tok-daily-chart').innerHTML = d.dates.map(dt=>{
+      const v = d.daily[dt] || {in:0,out:0,cost:0};
+      const total = v.in+v.out;
+      return `<div class="bar-row">
+        <div class="bar-dt">${dt.slice(5)}</div>
+        <div class="bar-track">
+          <div class="tok-in"  style="width:${v.in/maxDayTok*100}%"></div>
+          <div class="tok-out" style="width:${v.out/maxDayTok*100}%"></div>
+        </div>
+        <div class="bar-n">${fmtNum(total)}</div>
+      </div>`;
+    }).join('');
+  } catch(e){ console.error('tokens',e); }
+}
+
+// ── 모달 ────────────────────────────────────────────────
 function showModal(ts, level, module, msg) {
   document.getElementById('modal-title').textContent = `[${level}] ${ts}`;
   document.getElementById('modal-body').textContent  = `모듈: ${module}\n\n${msg}`;
@@ -632,11 +904,15 @@ function showAgentModal(agent, date, score, summary, improvement) {
 }
 function closeModal(e){ if(e.target.id==='modal') document.getElementById('modal').classList.remove('show'); }
 
-// ── 초기화 & 자동 갱신 ───────────────────────────────
+// ── 초기화 & 자동 갱신 ──────────────────────────────────
+loadHealth();
 loadStats();
 loadErrors();
-setInterval(()=>{ loadStats(); loadErrors(); }, 30000);
-setInterval(()=>{ if(document.getElementById('tab-agents').classList.contains('active')) loadAgentScores(); }, 60000);
+setInterval(()=>{ loadHealth(); loadStats(); loadErrors(); }, 30000);
+setInterval(()=>{
+  if(document.getElementById('tab-agents').classList.contains('active')) loadAgentScores();
+  if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
+}, 60000);
 </script>
 </body>
 </html>

@@ -8,6 +8,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./feedback:/app/feedback
+      - ./token_usage:/app/token_usage
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/host/kitty
     logging:
@@ -23,9 +24,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./logs:/logs:ro          # kitty 로그 읽기 전용
-      - ./feedback:/feedback:ro  # 에이전트 피드백 읽기 전용
-      - ./monitor-data:/data     # SQLite DB 영속 저장
+      - ./logs:/logs:ro               # kitty 로그 읽기 전용
+      - ./feedback:/feedback:ro       # 에이전트 피드백 읽기 전용
+      - ./token_usage:/token_usage:ro # 토큰 사용량 읽기 전용
+      - ./monitor-data:/data          # SQLite DB 영속 저장
     environment:
       - MONITOR_PASSWORD=${MONITOR_PASSWORD:-kitty}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}

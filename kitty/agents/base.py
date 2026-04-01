@@ -1,9 +1,14 @@
 """에이전트 기반 클래스 - 멀티 AI provider 지원"""
+import json
 from abc import ABC, abstractmethod
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from kitty.config import AIProvider, settings
 from kitty.utils import logger
+
+_TOKEN_DIR = Path("token_usage")
 
 
 class BaseAgent(ABC):
@@ -27,6 +32,32 @@ class BaseAgent(ABC):
     def reload_feedback(self) -> None:
         """피드백 파일이 업데이트됐을 때 system_prompt 갱신"""
         self.system_prompt = self._build_system_prompt()
+
+    def _record_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        """토큰 사용량을 token_usage/YYYY-MM-DD.json 에 기록"""
+        try:
+            _TOKEN_DIR.mkdir(exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            path = _TOKEN_DIR / f"{today}.json"
+            entry = {
+                "ts":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "agent":         self.name,
+                "provider":      self._provider.value,
+                "model":         self._model,
+                "input_tokens":  input_tokens,
+                "output_tokens": output_tokens,
+            }
+            entries = []
+            if path.exists():
+                try:
+                    entries = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    entries = []
+            entries.append(entry)
+            path.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+            logger.debug(f"[{self.name}] 토큰 기록: in={input_tokens} out={output_tokens}")
+        except Exception as e:
+            logger.warning(f"[{self.name}] 토큰 기록 실패: {e}")
 
     async def think(self, user_message: str) -> str:
         """설정된 AI provider에게 메시지를 보내고 응답을 받는다."""
@@ -54,6 +85,8 @@ class BaseAgent(ABC):
             system=self.system_prompt,
             messages=self._conversation,
         )
+        if response.usage:
+            self._record_tokens(response.usage.input_tokens, response.usage.output_tokens)
         return response.content[0].text if response.content else ""
 
     async def _think_openai(self) -> str:
@@ -65,6 +98,8 @@ class BaseAgent(ABC):
             max_tokens=4096,
             messages=messages,  # type: ignore[arg-type]
         )
+        if response.usage:
+            self._record_tokens(response.usage.prompt_tokens, response.usage.completion_tokens)
         return response.choices[0].message.content or ""
 
     async def _think_gemini(self) -> str:
@@ -74,13 +109,17 @@ class BaseAgent(ABC):
             model_name=self._model,
             system_instruction=self.system_prompt,
         )
-        # Gemini는 대화 이력을 별도 형식으로 변환
         history = [
             {"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]}
-            for m in self._conversation[:-1]  # 마지막 메시지 제외 (send_message로 전달)
+            for m in self._conversation[:-1]
         ]
         chat = model.start_chat(history=history)
         response = await chat.send_message_async(self._conversation[-1]["content"])
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            self._record_tokens(
+                response.usage_metadata.prompt_token_count,
+                response.usage_metadata.candidates_token_count,
+            )
         return response.text
 
     def reset_conversation(self) -> None:
