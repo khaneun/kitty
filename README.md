@@ -74,6 +74,8 @@
 | 장 외 분석 | 08:50~09:00 분석 실행, 주문은 09:00 이후만 허용 |
 | 에이전트 자기개선 | 장 마감 후 성과 평가 → 피드백 누적 → system_prompt 자동 반영 |
 | AWS 자동 스케줄 | EventBridge로 EC2 장 시작 전 자동 켜기/끄기 |
+| 모니터링 대시보드 | kitty-monitor (포트 8080) — 4탭 모바일 UI로 상태·에러·성적표·토큰 통합 조회 |
+| 토큰 사용량 추적 | AI 호출마다 token_usage/에 기록, 모델별 USD 비용 자동 추산 |
 
 ---
 
@@ -82,7 +84,7 @@
 ```
 kitty/
 ├── agents/
-│   ├── base.py                # 멀티 AI 공통 기반 (피드백 자동 로딩 포함)
+│   ├── base.py                # 멀티 AI 공통 기반 (피드백 자동 로딩, 토큰 사용량 기록)
 │   ├── sector_analyst.py      # [1] 섹터분석가
 │   ├── stock_evaluator.py     # [2] 종목평가가
 │   ├── stock_picker.py        # [3] 종목발굴가
@@ -104,7 +106,12 @@ kitty/
 ├── config.py                  # 환경 설정 (Pydantic)
 ├── main.py                    # 메인 루프
 └── report.py                  # 일별 JSON 리포트
+monitor/
+├── app.py                     # FastAPI 모니터링 서버 (4탭 대시보드 + SQLite)
+├── requirements.txt           # fastapi, uvicorn, httpx
+└── Dockerfile                 # kitty-monitor 이미지
 start.sh                       # EC2 부팅 스크립트 (git pull → Secrets 로딩 → Docker 빌드)
+docker-compose.yml             # 로컬 개발용 (kitty-trader + kitty-monitor)
 release-note.md                # 변경 이력
 ```
 
@@ -132,6 +139,7 @@ python -m kitty.main
 ### Docker 실행
 
 ```bash
+# kitty-trader
 docker build -t kitty-trader .
 docker run -d \
   --name kitty-trader \
@@ -139,7 +147,27 @@ docker run -d \
   --env-file .env \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/feedback:/app/feedback \
+  -v $(pwd)/token_usage:/app/token_usage \
   kitty-trader
+
+# kitty-monitor (포트 8080)
+docker build -t kitty-monitor ./monitor
+docker run -d \
+  --name kitty-monitor \
+  --restart unless-stopped \
+  -v $(pwd)/logs:/logs:ro \
+  -v $(pwd)/feedback:/feedback:ro \
+  -v $(pwd)/token_usage:/token_usage:ro \
+  -v $(pwd)/monitor-data:/data \
+  -e MONITOR_PASSWORD=kitty \
+  -p 8080:8080 \
+  kitty-monitor
+```
+
+또는 docker-compose로 두 서비스 동시 실행:
+
+```bash
+docker compose up -d
 ```
 
 ### 환경 설정 (.env)
@@ -248,12 +276,15 @@ MAX_POSITION_SIZE=5000000    # 종목당 최대 보유금액 (원)
 EC2 시작
   → systemd: docker.service
   → systemd: kitty.service (start.sh)
-      → git pull origin main          ← GitHub 최신 코드 자동 반영
+      → git pull origin main               ← GitHub 최신 코드 자동 반영
       → AWS Secrets Manager에서 시크릿 로딩
       → Docker 빌드 (캐시 활용)
       → kitty-trader 컨테이너 시작
-          → logs/, feedback/ 볼륨 마운트
+          → logs/, feedback/, token_usage/ 볼륨 마운트
           → /var/run/docker.sock 마운트 (Telegram AWS 제어용)
+      → kitty-monitor 컨테이너 시작 (포트 8080)
+          → logs/, feedback/, token_usage/ 읽기 전용 마운트
+          → monitor-data/ (SQLite DB 영속 보관)
 ```
 
 > 코드 수정 후 `git push`만 하면 다음 영업일 EC2 부팅 시 자동으로 반영됩니다.
@@ -365,6 +396,57 @@ kitty/prod
 ```
 
 **에이전트 피드백**: `feedback/{에이전트명}.json` (최근 10일, Docker 볼륨으로 영속 보관)
+
+**토큰 사용량**: `token_usage/YYYY-MM-DD.json` (AI 호출마다 자동 기록)
+
+```json
+[
+  {
+    "ts":            "2026-04-01 09:00:12",
+    "agent":         "섹터분석가",
+    "provider":      "openai",
+    "model":         "gpt-4o",
+    "input_tokens":  1240,
+    "output_tokens": 380
+  }
+]
+```
+
+---
+
+## 모니터링 대시보드 (kitty-monitor)
+
+EC2 포트 8080에서 HTTP Basic Auth로 접근합니다.
+
+```
+http://<EC2-IP>:8080
+```
+
+### 탭 구성
+
+| 탭 | 주요 정보 |
+|----|----------|
+| 🏥 상태 | ok/warning/critical 배지, 1시간 에러 건수, 마지막 로그 시각, 최근 에러 5건 |
+| 📋 에러 | 14일 에러 추이 차트, 날짜·레벨·키워드 필터, 로그 전문 조회 |
+| 🤖 성적표 | 에이전트별 최신 점수 + 7일 미니 바, 날짜별 히트맵 |
+| 🔢 토큰 | 오늘 토큰·비용, 에이전트별 누적 바 차트, 14일 일별 추이 |
+
+### 환경 변수 (kitty-monitor)
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `MONITOR_PASSWORD` | `kitty` | HTTP Basic Auth 비밀번호 |
+| `TELEGRAM_BOT_TOKEN` | — | 버스트/CRITICAL 알림용 (선택) |
+| `TELEGRAM_CHAT_ID` | — | 알림 수신 Chat ID (선택) |
+| `POLL_SEC` | `15` | 로그 파일 폴링 간격 (초) |
+| `RETAIN_DAYS` | `30` | SQLite 에러 보관 기간 (일) |
+
+### Telegram 알림 조건
+
+| 조건 | 알림 |
+|------|------|
+| CRITICAL 로그 발생 | 즉시 알림 (모듈당 1시간 쿨타임) |
+| 5분 내 ERROR 3건 이상 | 버스트 알림 (모듈당 5분 쿨타임) |
 
 ---
 
