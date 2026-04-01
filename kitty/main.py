@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-_MODE_REQ = Path("commands/mode_request.json")
+_MODE_REQ          = Path("commands/mode_request.json")
+_CHAT_DIR          = Path("commands/chat")
+_AGENT_CONTEXT_PATH = Path("logs/agent_context.json")
 
 import holidays
 
@@ -26,6 +28,68 @@ from kitty.evaluator import PerformanceEvaluator
 from kitty.report import DailyReport
 from kitty.telegram import TelegramReporter
 from kitty.utils import logger, print_portfolio_and_balance, setup_logger
+
+
+def _save_agent_context(agent_name: str, output: dict) -> None:
+    """에이전트 마지막 출력을 logs/agent_context.json 에 저장 (채팅 컨텍스트용)"""
+    try:
+        ctx: dict = {}
+        if _AGENT_CONTEXT_PATH.exists():
+            try:
+                ctx = json.loads(_AGENT_CONTEXT_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        ctx[agent_name] = {
+            "ts":     datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S"),
+            "output": output,
+        }
+        _AGENT_CONTEXT_PATH.write_text(json.dumps(ctx, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.debug(f"에이전트 컨텍스트 저장 실패: {e}")
+
+
+async def _chat_handler(agents_map: dict) -> None:
+    """commands/chat/req_*.json 채팅 요청 처리 → res_*.json 응답 (2초 폴링)"""
+    while True:
+        await asyncio.sleep(2)
+        try:
+            _CHAT_DIR.mkdir(parents=True, exist_ok=True)
+            for req_file in sorted(_CHAT_DIR.glob("req_*.json")):
+                try:
+                    req       = json.loads(req_file.read_text(encoding="utf-8"))
+                    req_id    = req.get("id", "")
+                    agent_name = req.get("agent", "")
+                    message   = req.get("message", "")
+
+                    agent = agents_map.get(agent_name)
+                    if agent is None:
+                        reply = f"에이전트 '{agent_name}'를 찾을 수 없습니다."
+                    else:
+                        context = ""
+                        if _AGENT_CONTEXT_PATH.exists():
+                            try:
+                                ctx_data   = json.loads(_AGENT_CONTEXT_PATH.read_text(encoding="utf-8"))
+                                agent_ctx  = ctx_data.get(agent_name, {})
+                                if agent_ctx.get("output"):
+                                    context = json.dumps(agent_ctx["output"], ensure_ascii=False, indent=2)
+                            except Exception:
+                                pass
+                        reply = await agent.chat(message, context)
+
+                    res_file = _CHAT_DIR / f"res_{req_id}.json"
+                    res_file.write_text(
+                        json.dumps({"id": req_id, "agent": agent_name, "reply": reply,
+                                    "ts": datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")},
+                                   ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    req_file.unlink(missing_ok=True)
+                    logger.debug(f"[채팅] {agent_name} 응답 완료 ({req_id})")
+                except Exception as e:
+                    logger.warning(f"[채팅] 요청 처리 실패 {req_file.name}: {e}")
+                    req_file.unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug(f"[채팅] 핸들러 오류: {e}")
 
 
 def _is_pre_market_or_market() -> bool:
@@ -84,6 +148,7 @@ async def run_trading_cycle(
     analysis = await sector_analyst.run({"portfolio": portfolio, "current_date": current_date})
     daily_report.record_analysis(analysis)
     reporter.update_analysis(analysis)
+    _save_agent_context("섹터분석가", analysis)
 
     # 3. 후보 종목 + 보유 종목 시세 조회
     candidate_symbols: set[str] = set()
@@ -113,6 +178,7 @@ async def run_trading_cycle(
     })
     daily_report.record_stock_evaluation(stock_evaluation)
     reporter.update_evaluation(stock_evaluation)
+    _save_agent_context("종목평가가", stock_evaluation)
 
     # 5. 종목발굴 (StockPickerAgent) - 신규 후보
     new_candidates = await stock_picker.run({
@@ -123,6 +189,7 @@ async def run_trading_cycle(
         "max_buy_amount": settings.max_buy_amount,
     })
     daily_report.record_stock_picks(new_candidates)
+    _save_agent_context("종목발굴가", new_candidates)
 
     # 6. 자산운용 (AssetManagerAgent) - 최종 주문 결정
     asset_plan = await asset_manager.run({
@@ -135,6 +202,7 @@ async def run_trading_cycle(
         "max_buy_amount": settings.max_buy_amount,
     })
     daily_report.record_asset_management(asset_plan)
+    _save_agent_context("자산운용가", asset_plan)
 
     final_orders = asset_plan.get("final_orders", [])
     if not final_orders:
@@ -160,6 +228,8 @@ async def run_trading_cycle(
     buy_results = buy_result.get("buy_results", [])
     sell_results = sell_result.get("sell_results", [])
     daily_report.record_executions(buy_results, sell_results)
+    _save_agent_context("매수실행가", {"buy_results": buy_results})
+    _save_agent_context("매도실행가", {"sell_results": sell_results})
 
     # 텔레그램 체결 보고
     for r in buy_results:
@@ -225,6 +295,17 @@ async def main() -> None:
 
     reporter.set_daily_report(daily_report)
     reporter.set_cycle_callback(_cycle_now)
+
+    # 채팅 핸들러 백그라운드 태스크
+    _agents_map = {
+        "섹터분석가": sector_analyst,
+        "종목평가가": stock_evaluator,
+        "종목발굴가": stock_picker,
+        "자산운용가": asset_manager,
+        "매수실행가": buy_executor,
+        "매도실행가": sell_executor,
+    }
+    asyncio.create_task(_chat_handler(_agents_map))
 
     # Telegram 폴링 시작 — 네트워크 미준비 or API 일시 오류 시 재시도
     for attempt in range(1, 6):

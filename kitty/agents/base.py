@@ -122,6 +122,37 @@ class BaseAgent(ABC):
             )
         return response.text
 
+    async def chat(self, user_message: str, context: str = "") -> str:
+        """one-shot Q&A — trading _conversation 오염 없이 별도 응답"""
+        system = self.system_prompt
+        if context:
+            system += f"\n\n[현재 분석/판단 컨텍스트 — 이 내용을 바탕으로 답변]\n{context}"
+        messages = [{"role": "user", "content": user_message}]
+
+        if self._provider == AIProvider.ANTHROPIC:
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            resp = await client.messages.create(
+                model=self._model, max_tokens=1024,
+                system=system, messages=messages,
+            )
+            return resp.content[0].text if resp.content else ""
+        elif self._provider == AIProvider.OPENAI:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            resp = await client.chat.completions.create(
+                model=self._model, max_tokens=1024,
+                messages=[{"role": "system", "content": system}] + messages,  # type: ignore[arg-type]
+            )
+            return resp.choices[0].message.content or ""
+        elif self._provider == AIProvider.GEMINI:
+            import google.generativeai as genai
+            genai.configure(api_key=settings.gemini_api_key)
+            model = genai.GenerativeModel(model_name=self._model, system_instruction=system)
+            resp = await model.generate_content_async(user_message)
+            return resp.text
+        return "지원하지 않는 AI provider입니다."
+
     def reset_conversation(self) -> None:
         self._conversation = []
 

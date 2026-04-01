@@ -372,6 +372,43 @@ def api_portfolio(req: Request):
                 "available_cash": 0, "total_eval": 0, "total_pnl": 0}
 
 
+@app.post("/api/chat")
+async def api_chat(req: Request):
+    """채팅 요청 → commands/chat/req_{id}.json 기록 후 id 반환"""
+    _auth(req)
+    import uuid
+    body = await req.json()
+    agent = body.get("agent", "")
+    message = body.get("message", "")
+    if not agent or not message:
+        from fastapi import HTTPException
+        raise HTTPException(400, "agent and message required")
+    req_id = uuid.uuid4().hex
+    chat_dir = CMD_DIR / "chat"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    req_file = chat_dir / f"req_{req_id}.json"
+    req_file.write_text(
+        json.dumps({"id": req_id, "agent": agent, "message": message}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {"id": req_id}
+
+
+@app.get("/api/chat/{req_id}")
+def api_chat_result(req: Request, req_id: str):
+    """채팅 응답 폴링 — 준비되면 reply 반환, 아직이면 ready:false"""
+    _auth(req)
+    res_file = CMD_DIR / "chat" / f"res_{req_id}.json"
+    if not res_file.exists():
+        return {"ready": False}
+    try:
+        data = json.loads(res_file.read_text(encoding="utf-8"))
+        res_file.unlink(missing_ok=True)
+        return {"ready": True, **data}
+    except Exception:
+        return {"ready": False}
+
+
 @app.post("/api/set-mode")
 async def api_set_mode(req: Request):
     """kitty 모드 전환 요청 — commands/mode_request.json 에 기록"""
@@ -613,6 +650,21 @@ table.log tr:hover td{background:#161b22}
 .recent-err:last-child{border-bottom:none}
 .recent-err .ts{color:#484f58;flex-shrink:0;white-space:nowrap}
 .recent-err .msg{color:#c9d1d9;word-break:break-word}
+/* 채팅 탭 */
+.chat-agent-sel{width:100%;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:8px 10px;font-size:13px;margin-bottom:10px;outline:none}
+.chat-agent-sel:focus{border-color:#58a6ff}
+.chat-history{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px;min-height:280px;max-height:420px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:10px}
+.chat-msg{display:flex;flex-direction:column;gap:3px;max-width:92%}
+.chat-msg.user{align-self:flex-end;align-items:flex-end}
+.chat-msg.assistant{align-self:flex-start;align-items:flex-start}
+.chat-bubble{padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.55;word-break:break-word;white-space:pre-wrap}
+.chat-msg.user .chat-bubble{background:#1c4a7a;color:#cae0f9;border-bottom-right-radius:3px}
+.chat-msg.assistant .chat-bubble{background:#21262d;color:#c9d1d9;border-bottom-left-radius:3px}
+.chat-meta{font-size:10px;color:#484f58;padding:0 2px}
+.chat-thinking{color:#484f58;font-size:12px;font-style:italic;padding:8px 4px;animation:blink 1.4s infinite}
+.chat-input-row{display:flex;gap:8px;align-items:flex-end}
+.chat-input{flex:1;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:8px 10px;font-size:13px;resize:none;min-height:40px;max-height:120px;outline:none;font-family:inherit}
+.chat-input:focus{border-color:#58a6ff}
 </style>
 </head>
 <body>
@@ -632,6 +684,7 @@ table.log tr:hover td{background:#161b22}
   <div class="tab" onclick="switchTab('errors')">📋 에러</div>
   <div class="tab" onclick="switchTab('agents')">🤖 성적표</div>
   <div class="tab" onclick="switchTab('tokens')">🔢 토큰</div>
+  <div class="tab" onclick="switchTab('chat')">💬 채팅</div>
 </div>
 
 <!-- ══ 상태 탭 ══ -->
@@ -744,6 +797,31 @@ table.log tr:hover td{background:#161b22}
 </div>
 </div>
 
+<!-- ══ 채팅 탭 ══ -->
+<div id="tab-chat" class="tab-content">
+<div class="wrap">
+  <div class="section">
+    <div class="sec-title">에이전트 채팅</div>
+    <select id="chat-agent" class="chat-agent-sel">
+      <option value="섹터분석가">섹터분석가</option>
+      <option value="종목발굴가">종목발굴가</option>
+      <option value="종목평가가">종목평가가</option>
+      <option value="자산운용가">자산운용가</option>
+      <option value="매수실행가">매수실행가</option>
+      <option value="매도실행가">매도실행가</option>
+    </select>
+    <div class="chat-history" id="chat-history">
+      <div style="text-align:center;color:#484f58;font-size:12px;padding:20px">에이전트를 선택하고 질문해보세요.<br>예: "왜 그런 판단을 했나요?", "분석 근거를 설명해줘"</div>
+    </div>
+    <div class="chat-input-row">
+      <textarea id="chat-input" class="chat-input" rows="1" placeholder="질문 입력 (Enter: 전송 / Shift+Enter: 줄바꿈)"
+        onkeydown="onChatKey(event)" oninput="autoResize(this)"></textarea>
+      <button class="btn btn-pri" id="chat-send-btn" onclick="sendChat()">전송</button>
+    </div>
+  </div>
+</div>
+</div>
+
 <!-- 모달 -->
 <div class="modal-bg" id="modal" onclick="closeModal(event)">
   <div class="modal">
@@ -754,7 +832,7 @@ table.log tr:hover td{background:#161b22}
 </div>
 
 <script>
-const TAB_NAMES = ['health','errors','agents','tokens'];
+const TAB_NAMES = ['health','errors','agents','tokens','chat'];
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t,i)=>{
@@ -1055,6 +1133,108 @@ function showAgentModal(agent, date, score, summary, improvement) {
   document.getElementById('modal').classList.add('show');
 }
 function closeModal(e){ if(e.target.id==='modal') document.getElementById('modal').classList.remove('show'); }
+
+// ── 채팅 탭 ─────────────────────────────────────────────
+let _chatPollTimer = null;
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function onChatKey(e) {
+  if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+
+function appendChatMsg(role, text, agent) {
+  const hist = document.getElementById('chat-history');
+  // 초기 안내 문구 제거
+  const placeholder = hist.querySelector('div[style]');
+  if(placeholder) placeholder.remove();
+
+  const now = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+  const metaText = role==='user' ? now : `${agent||''} · ${now}`;
+  const div = document.createElement('div');
+  div.className = `chat-msg ${role}`;
+  div.innerHTML = `<div class="chat-bubble">${esc(text)}</div><div class="chat-meta">${metaText}</div>`;
+  hist.appendChild(div);
+  hist.scrollTop = hist.scrollHeight;
+  return div;
+}
+
+function appendThinking() {
+  const hist = document.getElementById('chat-history');
+  const div = document.createElement('div');
+  div.id = 'chat-thinking';
+  div.className = 'chat-thinking';
+  div.textContent = '답변 생성 중...';
+  hist.appendChild(div);
+  hist.scrollTop = hist.scrollHeight;
+}
+
+function removeThinking() {
+  const el = document.getElementById('chat-thinking');
+  if(el) el.remove();
+}
+
+async function sendChat() {
+  const agent = document.getElementById('chat-agent').value;
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if(!message) return;
+
+  const btn = document.getElementById('chat-send-btn');
+  btn.disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  appendChatMsg('user', message);
+  appendThinking();
+
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({agent, message})
+    });
+    if(!r.ok) throw new Error('요청 실패');
+    const {id} = await r.json();
+    pollChatResponse(id, agent);
+  } catch(e) {
+    removeThinking();
+    appendChatMsg('assistant', '오류: ' + e.message, agent);
+    btn.disabled = false;
+  }
+}
+
+async function pollChatResponse(id, agent) {
+  const MAX_WAIT = 60; // 최대 60초
+  let elapsed = 0;
+  const btn = document.getElementById('chat-send-btn');
+
+  const poll = async () => {
+    try {
+      const r = await fetch(`/api/chat/${id}`).then(x=>x.json());
+      if(r.ready) {
+        removeThinking();
+        appendChatMsg('assistant', r.reply || '(빈 응답)', agent);
+        btn.disabled = false;
+      } else if(elapsed >= MAX_WAIT) {
+        removeThinking();
+        appendChatMsg('assistant', '응답 시간 초과. kitty가 실행 중인지 확인해주세요.', agent);
+        btn.disabled = false;
+      } else {
+        elapsed += 2;
+        setTimeout(poll, 2000);
+      }
+    } catch(e) {
+      removeThinking();
+      appendChatMsg('assistant', '폴링 오류: ' + e.message, agent);
+      btn.disabled = false;
+    }
+  };
+  setTimeout(poll, 2000);
+}
 
 // ── 초기화 & 자동 갱신 ──────────────────────────────────
 loadHealth();
