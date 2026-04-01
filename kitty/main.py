@@ -222,9 +222,24 @@ async def main() -> None:
     reporter.set_daily_report(daily_report)
     reporter.set_cycle_callback(_cycle_now)
 
-    await reporter.start_polling()
+    # Telegram 폴링 시작 — 네트워크 미준비 or API 일시 오류 시 재시도
+    for attempt in range(1, 6):
+        try:
+            await reporter.start_polling()
+            break
+        except Exception as e:
+            logger.warning(f"Telegram 폴링 시작 실패 ({attempt}/5): {e}")
+            if attempt == 5:
+                logger.error("Telegram 폴링 최종 실패 — 봇 없이 계속 실행")
+            else:
+                await asyncio.sleep(10 * attempt)
+
     await reporter.send(f"🐱 Kitty 시작! 모드: `{settings.trading_mode.value}`")
-    await print_portfolio_and_balance(broker, label="시작")
+
+    try:
+        await print_portfolio_and_balance(broker, label="시작")
+    except Exception as e:
+        logger.warning(f"시작 시 잔고 조회 실패 (무시): {e}")
     last_report_date = daily_report.date
     last_eval_date: str = ""
     evaluator = PerformanceEvaluator(broker)

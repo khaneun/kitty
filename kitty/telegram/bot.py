@@ -500,6 +500,8 @@ class TelegramReporter:
             "docker run -d --name kitty-trader --restart unless-stopped "
             "--env-file /tmp/kitty_env.txt "
             "-v /home/ec2-user/kitty/logs:/app/logs "
+            "-v /home/ec2-user/kitty/feedback:/app/feedback "
+            "-v /home/ec2-user/kitty/token_usage:/app/token_usage "
             "-v /var/run/docker.sock:/var/run/docker.sock "
             "-v /home/ec2-user/kitty:/host/kitty "
             "kitty-trader && "
