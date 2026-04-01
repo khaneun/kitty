@@ -61,7 +61,7 @@ class SectorAnalystAgent(BaseAgent):
         if portfolio:
             holdings_text = "\n[현재 보유 종목]\n" + "\n".join(
                 f"- {p.get('pdno', '')} {p.get('prdt_name', '')}: "
-                f"{p.get('hldg_qty', 0)}주 (평균단가 {int(p.get('pchs_avg_pric', 0)):,}원)"
+                f"{p.get('hldg_qty', 0)}주 (평균단가 {int(float(p.get('pchs_avg_pric', 0))):,}원)"
                 for p in portfolio
             )
 
