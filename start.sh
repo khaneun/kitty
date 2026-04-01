@@ -66,6 +66,7 @@ docker run -d \
   --name kitty-monitor \
   --restart unless-stopped \
   -v /home/ec2-user/kitty/logs:/logs:ro \
+  -v /home/ec2-user/kitty/feedback:/feedback:ro \
   -v /home/ec2-user/kitty/monitor-data:/data \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \
