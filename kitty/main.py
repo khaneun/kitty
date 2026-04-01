@@ -273,6 +273,39 @@ def _format_eval_summary(results: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_tendency_update(profile: dict) -> str:
+    """투자성향 업데이트 결과 → 텔레그램 메시지"""
+    from kitty.agents.tendency import DIMS, DIM_LABELS, LEVEL_LABEL, LEVEL_VALUES
+
+    label = profile.get("label", "-")
+    levels = profile.get("levels", {})
+    rationale = profile.get("rationale", "")
+    updated_at = profile.get("updated_at", "")
+
+    lines = [f"📐 *내일 투자 성향 확정*\n"]
+    lines.append(f"성향: *{label}*\n")
+
+    dim_display = {
+        "take_profit": ("익절",    lambda v: f"+{v:.1f}%"),
+        "stop_loss":   ("손절",    lambda v: f"{v:.1f}%"),
+        "cash":        ("현금",    lambda v: f"{int(v*100)}%"),
+        "max_weight":  ("종목집중", lambda v: f"최대 {v:.0f}%"),
+        "entry":       ("진입기준", lambda v: f"±{v:.1f}%"),
+    }
+    for dim in DIMS:
+        lv = levels.get(dim, "-")
+        name, fmt = dim_display[dim]
+        val = fmt(LEVEL_VALUES[dim][lv]) if isinstance(lv, int) else "-"
+        lv_label = LEVEL_LABEL.get(lv, "-") if isinstance(lv, int) else "-"
+        lines.append(f"  {name}: `L{lv} {lv_label}` → {val}")
+
+    if rationale:
+        lines.append(f"\n💭 _{rationale}_")
+    if updated_at:
+        lines.append(f"\n_내일 장 시작부터 위 기준이 적용됩니다._")
+    return "\n".join(lines)
+
+
 async def main() -> None:
     setup_logger()
     logger.info(f"🐱 Kitty 시작 - 모드: {settings.trading_mode.value}")
@@ -381,6 +414,14 @@ async def main() -> None:
                                       tendency_agent]:
                             agent.reload_feedback()
                         await reporter.send(_format_eval_summary(results))
+
+                        # 투자성향관리자: 성과 분석 기반 내일 레벨 결정
+                        try:
+                            new_profile = await tendency_agent.update_strategy(results)
+                            _save_agent_context("투자성향관리자", new_profile)
+                            await reporter.send(_format_tendency_update(new_profile))
+                        except Exception as te:
+                            logger.error(f"투자성향 업데이트 오류: {te}")
                 except Exception as e:
                     logger.error(f"성과 평가 오류: {e}")
 

@@ -667,16 +667,22 @@ table.log tr:hover td{background:#161b22}
 .recent-err .ts{color:#484f58;flex-shrink:0;white-space:nowrap}
 .recent-err .msg{color:#c9d1d9;word-break:break-word}
 /* 투자 성향 카드 */
-.tendency-card{display:flex;align-items:center;gap:12px;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:8px;margin-bottom:14px}
+.tendency-card{padding:12px 14px;background:#0d1117;border:1px solid #30363d;border-radius:8px;margin-bottom:14px}
+.tendency-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 .tendency-badge{flex-shrink:0;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.3px}
 .t-aggressive{background:#2d1b00;color:#f0883e;border:1px solid #5c3a00}
 .t-balanced{background:#0d2d3d;color:#58a6ff;border:1px solid #1a4a6e}
 .t-conservative{background:#1a2a1a;color:#3fb950;border:1px solid #2a4a2a}
-.tendency-info{flex:1;min-width:0}
-.tendency-desc{font-size:12px;color:#8b949e;line-height:1.5;margin-top:2px}
-.tendency-params{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap}
-.tendency-param{font-size:10px;color:#484f58}
-.tendency-param span{color:#c9d1d9;font-weight:600}
+.tendency-rationale{font-size:11px;color:#6e7681;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tendency-dims{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.td-dim{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:6px 8px;min-width:0}
+.td-dim-name{display:block;font-size:9px;color:#484f58;letter-spacing:.4px;text-transform:uppercase;margin-bottom:3px}
+.td-dim-lv{display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:10px;margin-bottom:3px}
+.lv-1{background:#3d1a00;color:#ff8c00}.lv-2{background:#2d1b00;color:#f0883e}
+.lv-3{background:#1a2a3d;color:#79c0ff}.lv-4{background:#0d2d3d;color:#58a6ff}
+.lv-5{background:#1a2a1a;color:#3fb950}.lv-6{background:#0d1f0d;color:#2ea043}
+.td-dim-val{display:block;font-size:12px;font-weight:700;color:#c9d1d9}
+.td-dim-sub{display:block;font-size:9px;color:#484f58;margin-top:1px}
 /* 서브탭 (관리 영역) */
 .subtabs{display:flex;background:#0d1117;border-bottom:1px solid #21262d;position:sticky;top:83px;z-index:98;overflow-x:auto}
 .subtab{padding:7px 16px;font-size:11px;color:#484f58;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0;letter-spacing:.3px}
@@ -793,15 +799,16 @@ body{padding-bottom:80px}
 <div class="wrap">
   <!-- 투자 성향 -->
   <div id="tendency-card" class="tendency-card" style="display:none">
-    <span id="td-badge" class="tendency-badge">-</span>
-    <div class="tendency-info">
-      <div id="td-desc" class="tendency-desc">-</div>
-      <div class="tendency-params">
-        <div class="tendency-param">익절 <span id="td-tp">-</span></div>
-        <div class="tendency-param">손절 <span id="td-sl">-</span></div>
-        <div class="tendency-param">현금 <span id="td-cash">-</span></div>
-        <div class="tendency-param">종목 최대 <span id="td-wt">-</span></div>
-      </div>
+    <div class="tendency-header">
+      <span id="td-badge" class="tendency-badge">-</span>
+      <div id="td-rationale" class="tendency-rationale">-</div>
+    </div>
+    <div class="tendency-dims" id="td-dims">
+      <div class="td-dim"><span class="td-dim-name">익절</span><span id="td-tp-lv" class="td-dim-lv lv-2">L2</span><span id="td-tp" class="td-dim-val">-</span><span id="td-tp-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">손절</span><span id="td-sl-lv" class="td-dim-lv lv-2">L2</span><span id="td-sl" class="td-dim-val">-</span><span id="td-sl-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">현금</span><span id="td-cash-lv" class="td-dim-lv lv-2">L2</span><span id="td-cash" class="td-dim-val">-</span><span id="td-cash-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">집중도</span><span id="td-wt-lv" class="td-dim-lv lv-2">L2</span><span id="td-wt" class="td-dim-val">-</span><span id="td-wt-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">진입기준</span><span id="td-en-lv" class="td-dim-lv lv-2">L2</span><span id="td-en" class="td-dim-val">-</span><span id="td-en-sub" class="td-dim-sub">-</span></div>
     </div>
   </div>
   <!-- 포트폴리오 현황 -->
@@ -1082,20 +1089,30 @@ function updateModeStyle(sel, mode) {
 }
 
 // ── 투자 성향 카드 ───────────────────────────────────────
+const LV_LABELS = {1:'매우 공격적',2:'공격적',3:'적극적',4:'균형',5:'보수적',6:'매우 보수적'};
+function setDimCell(idPfx, lv, val, sub) {
+  const lvEl = document.getElementById(idPfx+'-lv');
+  if(lvEl){ lvEl.textContent='L'+lv; lvEl.className='td-dim-lv lv-'+lv; }
+  const vEl = document.getElementById(idPfx);
+  if(vEl) vEl.textContent = val;
+  const sEl = document.getElementById(idPfx+'-sub');
+  if(sEl) sEl.textContent = LV_LABELS[lv]||'-';
+}
 async function loadTendency() {
   try {
     const d = await fetch('/api/tendency').then(r=>r.json());
     if(!d.profile_name) return;
-    const card = document.getElementById('tendency-card');
-    card.style.display = 'flex';
+    document.getElementById('tendency-card').style.display = '';
     const badge = document.getElementById('td-badge');
     badge.textContent = d.label || d.profile_name;
     badge.className = 'tendency-badge t-' + d.profile_name;
-    document.getElementById('td-desc').textContent = d.description || '';
-    document.getElementById('td-tp').textContent   = d.take_profit_pct != null ? '+'+d.take_profit_pct+'%' : '-';
-    document.getElementById('td-sl').textContent   = d.stop_loss_pct  != null ? d.stop_loss_pct+'%'       : '-';
-    document.getElementById('td-cash').textContent = d.cash_reserve_min != null ? Math.round(d.cash_reserve_min*100)+'%이상' : '-';
-    document.getElementById('td-wt').textContent   = d.max_weight_pct != null ? d.max_weight_pct+'%'      : '-';
+    document.getElementById('td-rationale').textContent = d.rationale || '';
+    const lv = d.levels || {};
+    setDimCell('td-tp',   lv.take_profit||2, d.take_profit_pct!=null?'+'+d.take_profit_pct+'%':'-');
+    setDimCell('td-sl',   lv.stop_loss  ||2, d.stop_loss_pct  !=null?d.stop_loss_pct+'%'      :'-');
+    setDimCell('td-cash', lv.cash       ||2, d.cash_reserve_min!=null?Math.round(d.cash_reserve_min*100)+'%이상':'-');
+    setDimCell('td-wt',   lv.max_weight ||2, d.max_weight_pct !=null?'최대 '+d.max_weight_pct+'%':'-');
+    setDimCell('td-en',   lv.entry      ||2, d.entry_threshold_pct!=null?'±'+d.entry_threshold_pct+'%':'-');
   } catch(e){ console.error('tendency',e); }
 }
 
