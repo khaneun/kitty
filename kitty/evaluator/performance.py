@@ -3,8 +3,8 @@
 평가 흐름:
   1. 오늘 DailyReport에서 각 에이전트의 결정 수집
   2. KIS API로 EOD 가격/등락률 조회
-  3. 에이전트별 정량 지표 계산
-  4. AI로 자연어 피드백 + 개선 포인트 생성
+  3. 에이전트별 정량 지표 + 구체적 판단 내역 기록
+  4. AI로 자연어 피드백 (성과 요약 + 개선 지침 + 유지할 패턴)
   5. feedback/*.json 에 저장 (BaseAgent가 다음 사이클부터 system_prompt에 주입)
 """
 import json
@@ -56,12 +56,15 @@ class PerformanceEvaluator:
                 metrics = eval_fn(daily_report, eod)
                 if not metrics:
                     continue
-                feedback = await self._ai_feedback(agent_name, metrics)
+                # decision_details는 AI에게 전달하되 최종 저장에서는 제외
+                decision_details = metrics.pop("decision_details", "")
+                feedback = await self._ai_feedback(agent_name, metrics, decision_details)
                 entry = {
                     "date": daily_report.date,
                     "score": metrics["score"],
-                    "summary": feedback.get("summary", f"점수 {metrics['score']}/10"),
+                    "summary": feedback.get("summary", f"점수 {metrics['score']}/100"),
                     "improvement": feedback.get("improvement", ""),
+                    "good_pattern": feedback.get("good_pattern", ""),
                     "metrics": metrics,
                 }
                 append_entry(agent_name, entry)
@@ -108,9 +111,10 @@ class PerformanceEvaluator:
     # ──────────────────────────────────────────
 
     def _eval_sector_analyst(self, report: DailyReport, eod: dict) -> dict:
-        """섹터 방향 예측 적중률"""
+        """섹터 방향 예측 적중률 + 구체적 섹터별 결과"""
         hits, total = 0, 0
         sector_details = []
+        detail_lines = []
 
         for c in report.cycles:
             for s in c.market_analysis.get("sectors", []):
@@ -128,23 +132,29 @@ class PerformanceEvaluator:
                     "sector": s.get("name"), "predicted": trend,
                     "avg_change": round(avg_chg, 2), "correct": correct,
                 })
+                mark = "✓" if correct else "✗"
+                detail_lines.append(
+                    f"  {s.get('name')} 예측:{trend} → 실제 {avg_chg:+.2f}% {mark}"
+                )
 
         if total == 0:
             return {}
 
         acc = hits / total
         return {
-            "score": min(100, round(acc * 100 + 10)),  # +10 보정으로 50 이상부터 시작
+            "score": min(100, round(acc * 100 + 10)),
             "accuracy": round(acc, 2),
             "hits": hits, "total": total,
             "sector_details": sector_details,
             "market_sentiment": report.cycles[-1].market_analysis.get("market_sentiment"),
+            "decision_details": "\n".join(detail_lines),
         }
 
     def _eval_stock_picker(self, report: DailyReport, eod: dict) -> dict:
-        """추천 종목의 당일 수익률"""
+        """추천 종목의 당일 수익률 + 개별 종목 결과"""
         buy_changes: list[float] = []
         sell_correct, sell_total = 0, 0
+        detail_lines: list[str] = []
 
         for c in report.cycles:
             for d in c.stock_picks.get("decisions", []):
@@ -152,12 +162,19 @@ class PerformanceEvaluator:
                 if not sym or sym not in eod:
                     continue
                 chg = eod[sym]["change_rate"]
+                name = eod[sym].get("name", sym)
+                reason = d.get("reason", "")[:80]
                 if action == "BUY":
                     buy_changes.append(chg)
+                    mark = "✓" if chg > 0 else "✗"
+                    detail_lines.append(f"  BUY {name}({sym}) → {chg:+.2f}% {mark} | {reason}")
                 elif action == "SELL":
                     sell_total += 1
-                    if chg < 0:
+                    hit = chg < 0
+                    if hit:
                         sell_correct += 1
+                    mark = "✓" if hit else "✗"
+                    detail_lines.append(f"  SELL {name}({sym}) → {chg:+.2f}% {mark} | {reason}")
 
         if not buy_changes and sell_total == 0:
             return {}
@@ -178,12 +195,14 @@ class PerformanceEvaluator:
             "buy_count": len(buy_changes),
             "avg_buy_return": round(avg_return, 2) if avg_return is not None else None,
             "sell_accuracy": round(sell_acc, 2) if sell_acc is not None else None,
+            "decision_details": "\n".join(detail_lines),
         }
 
     def _eval_stock_evaluator(self, report: DailyReport, eod: dict) -> dict:
-        """보유 종목 HOLD/BUY_MORE/SELL 판단 정확도"""
+        """보유 종목 HOLD/BUY_MORE/SELL 판단 정확도 + 개별 결과"""
         correct, total = 0, 0
         details = []
+        detail_lines: list[str] = []
 
         for c in report.cycles:
             for e in c.stock_evaluation.get("evaluations", []):
@@ -191,6 +210,8 @@ class PerformanceEvaluator:
                 if not sym or not action or sym not in eod:
                     continue
                 chg = eod[sym]["change_rate"]
+                name = eod[sym].get("name", sym)
+                reason = e.get("reason", "")[:80]
                 hit = (
                     (action == "HOLD"         and -3 <= chg <= 5) or
                     (action == "BUY_MORE"     and chg > 0)        or
@@ -200,6 +221,8 @@ class PerformanceEvaluator:
                 correct += int(hit)
                 total += 1
                 details.append({"symbol": sym, "action": action, "change": chg, "correct": hit})
+                mark = "✓" if hit else "✗"
+                detail_lines.append(f"  {action} {name}({sym}) → {chg:+.2f}% {mark} | {reason}")
 
         if total == 0:
             return {}
@@ -210,11 +233,13 @@ class PerformanceEvaluator:
             "accuracy": round(acc, 2),
             "correct": correct, "total": total,
             "details": details,
+            "decision_details": "\n".join(detail_lines),
         }
 
     def _eval_asset_manager(self, report: DailyReport, eod: dict) -> dict:
-        """최종 주문 결정의 방향성 정확도"""
+        """최종 주문 결정의 방향성 정확도 + 개별 주문 결과"""
         direction_scores: list[float] = []
+        detail_lines: list[str] = []
 
         for c in report.cycles:
             for o in c.asset_management.get("final_orders", []):
@@ -222,11 +247,17 @@ class PerformanceEvaluator:
                 if not sym or sym not in eod:
                     continue
                 chg = eod[sym]["change_rate"]
-                # 매수 → 상승이 좋음 / 매도 → 하락이 좋음
+                name = eod[sym].get("name", sym)
+                reason = o.get("reason", "")[:80]
                 if action in ("BUY", "BUY_MORE"):
                     direction_scores.append(chg)
+                    mark = "✓" if chg > 0 else "✗"
                 elif action in ("SELL", "PARTIAL_SELL"):
                     direction_scores.append(-chg)
+                    mark = "✓" if chg < 0 else "✗"
+                else:
+                    continue
+                detail_lines.append(f"  {action} {name}({sym}) → {chg:+.2f}% {mark} | {reason}")
 
         if not direction_scores:
             return {}
@@ -243,30 +274,39 @@ class PerformanceEvaluator:
             "score": score,
             "order_count": len(direction_scores),
             "avg_direction_score": round(avg, 2),
+            "decision_details": "\n".join(detail_lines),
         }
 
     def _eval_buy_executor(self, report: DailyReport, eod: dict) -> dict:
-        """체결가 vs EOD 가격 (낮은 가격에 매수할수록 좋음)"""
+        """체결가 vs EOD 가격 + 개별 주문 효율"""
         efficiencies: list[float] = []
         failed_count = 0
+        detail_lines: list[str] = []
 
         for c in report.cycles:
             for r in c.buy_results:
+                sym = r.get("symbol", "")
                 if r.get("status") in ("FILLED", "PARTIAL"):
-                    sym, exec_price = r.get("symbol"), r.get("price", 0)
+                    exec_price = r.get("price", 0)
                     if not sym or not exec_price or sym not in eod:
                         continue
                     eod_price = eod[sym]["price"]
+                    name = eod[sym].get("name", sym)
                     eff = (eod_price - exec_price) / exec_price * 100
                     efficiencies.append(eff)
+                    mark = "✓" if eff > 0 else "✗"
+                    detail_lines.append(
+                        f"  {name}({sym}) 매수@{exec_price:,} → EOD {eod_price:,} ({eff:+.1f}%) {mark}"
+                    )
                 elif r.get("status") == "FAILED":
                     failed_count += 1
+                    reason = r.get("reason", "")[:60]
+                    detail_lines.append(f"  {sym} 매수 실패: {reason}")
 
         total_attempted = len(efficiencies) + failed_count
         if total_attempted == 0:
             return {}
 
-        # 시도는 했으나 체결 없으면 최저점
         if not efficiencies:
             return {
                 "score": 10,
@@ -274,6 +314,7 @@ class PerformanceEvaluator:
                 "failed_count": failed_count,
                 "avg_efficiency_pct": None,
                 "note": "주문 시도했으나 체결 없음",
+                "decision_details": "\n".join(detail_lines),
             }
 
         avg = sum(efficiencies) / len(efficiencies)
@@ -288,30 +329,39 @@ class PerformanceEvaluator:
             "filled_count": len(efficiencies),
             "failed_count": failed_count,
             "avg_efficiency_pct": round(avg, 2),
+            "decision_details": "\n".join(detail_lines),
         }
 
     def _eval_sell_executor(self, report: DailyReport, eod: dict) -> dict:
-        """체결가 vs EOD 가격 (높은 가격에 매도할수록 좋음)"""
+        """체결가 vs EOD 가격 + 개별 주문 효율"""
         efficiencies: list[float] = []
         failed_count = 0
+        detail_lines: list[str] = []
 
         for c in report.cycles:
             for r in c.sell_results:
+                sym = r.get("symbol", "")
                 if r.get("status") in ("FILLED", "PARTIAL"):
-                    sym, exec_price = r.get("symbol"), r.get("price", 0)
+                    exec_price = r.get("price", 0)
                     if not sym or not exec_price or sym not in eod:
                         continue
                     eod_price = eod[sym]["price"]
+                    name = eod[sym].get("name", sym)
                     eff = (exec_price - eod_price) / eod_price * 100
                     efficiencies.append(eff)
+                    mark = "✓" if eff > 0 else "✗"
+                    detail_lines.append(
+                        f"  {name}({sym}) 매도@{exec_price:,} → EOD {eod_price:,} ({eff:+.1f}%) {mark}"
+                    )
                 elif r.get("status") == "FAILED":
                     failed_count += 1
+                    reason = r.get("reason", "")[:60]
+                    detail_lines.append(f"  {sym} 매도 실패: {reason}")
 
         total_attempted = len(efficiencies) + failed_count
         if total_attempted == 0:
             return {}
 
-        # 시도는 했으나 체결 없으면 최저점
         if not efficiencies:
             return {
                 "score": 10,
@@ -319,6 +369,7 @@ class PerformanceEvaluator:
                 "failed_count": failed_count,
                 "avg_efficiency_pct": None,
                 "note": "주문 시도했으나 체결 없음",
+                "decision_details": "\n".join(detail_lines),
             }
 
         avg = sum(efficiencies) / len(efficiencies)
@@ -333,21 +384,32 @@ class PerformanceEvaluator:
             "filled_count": len(efficiencies),
             "failed_count": failed_count,
             "avg_efficiency_pct": round(avg, 2),
+            "decision_details": "\n".join(detail_lines),
         }
 
     # ──────────────────────────────────────────
     # AI 피드백 생성
     # ──────────────────────────────────────────
 
-    async def _ai_feedback(self, agent_name: str, metrics: dict) -> dict:
-        """성과 지표 → 자연어 피드백 + 개선 포인트"""
+    async def _ai_feedback(
+        self, agent_name: str, metrics: dict, decision_details: str = "",
+    ) -> dict:
+        """성과 지표 + 구체적 판단 내역 → 자연어 피드백"""
+        detail_section = ""
+        if decision_details:
+            detail_section = f"\n[구체적 판단 내역 — ✓ 정확, ✗ 오판]\n{decision_details}\n"
+
         prompt = (
             f"다음은 오늘 '{agent_name}' 에이전트의 성과 데이터입니다.\n"
-            f"{json.dumps(metrics, ensure_ascii=False)}\n\n"
-            "점수는 0~100점 척도입니다 (100점 = 최고, 0점 = 최저).\n"
-            "이 데이터를 바탕으로 아래 JSON 형식으로만 응답하세요:\n"
-            '{"summary": "오늘 성과 한 줄 요약 (수치 포함, 50자 이내)", '
-            '"improvement": "다음 거래에서 개선할 구체적인 행동 지침 (40자 이내)"}'
+            f"점수는 0~100점 척도입니다.\n\n"
+            f"[성과 지표]\n{json.dumps(metrics, ensure_ascii=False, indent=2)}\n"
+            f"{detail_section}\n"
+            "위 데이터를 분석하여 아래 JSON 형식으로만 응답하세요:\n"
+            "{\n"
+            '  "summary": "오늘 성과 요약 — 점수·핵심 수치·잘한 점·못한 점 포함 (100자 이내)",\n'
+            '  "improvement": "내일 개선할 구체적 행동 지침 — 무엇을 어떻게 바꿀지, 오늘 오판의 원인과 대안을 명시 (200자 이내)",\n'
+            '  "good_pattern": "오늘 잘한 판단이 있다면 내일도 유지할 패턴 (80자 이내, 없으면 빈 문자열)"\n'
+            "}"
         )
         try:
             if settings.ai_provider == AIProvider.OPENAI:
@@ -355,7 +417,7 @@ class PerformanceEvaluator:
                 client = AsyncOpenAI(api_key=settings.openai_api_key)
                 resp = await client.chat.completions.create(
                     model=settings.resolved_model,
-                    max_tokens=200,
+                    max_tokens=400,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"},
                 )
@@ -366,11 +428,20 @@ class PerformanceEvaluator:
                 client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
                 resp = await client.messages.create(
                     model=settings.resolved_model,
-                    max_tokens=200,
+                    max_tokens=400,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 text = resp.content[0].text if resp.content else "{}"
-                m = re.search(r"\{.*?\}", text, re.DOTALL)
+                m = re.search(r"\{.*\}", text, re.DOTALL)
+                return json.loads(m.group()) if m else {}
+
+            elif settings.ai_provider == AIProvider.GEMINI:
+                import google.generativeai as genai
+                genai.configure(api_key=settings.gemini_api_key)
+                model = genai.GenerativeModel(model_name=settings.resolved_model)
+                resp = await model.generate_content_async(prompt)
+                text = resp.text or "{}"
+                m = re.search(r"\{.*\}", text, re.DOTALL)
                 return json.loads(m.group()) if m else {}
 
         except Exception as e:
@@ -379,4 +450,5 @@ class PerformanceEvaluator:
         return {
             "summary": f"점수 {metrics.get('score', 50)}/100 달성",
             "improvement": "추가 데이터 축적 후 분석 예정",
+            "good_pattern": "",
         }

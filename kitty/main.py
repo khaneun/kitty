@@ -320,6 +320,8 @@ def _format_eval_summary(results: dict) -> str:
         emoji = next((e for r, e in score_emoji.items() if score in r), "⚪")
         lines.append(f"{emoji} *{agent_name}* `{score}/100`")
         lines.append(f"   {entry.get('summary', '')}")
+        if entry.get("good_pattern"):
+            lines.append(f"   ✅ _{entry['good_pattern']}_")
         if entry.get("improvement"):
             lines.append(f"   💡 _{entry['improvement']}_")
     lines.append("\n_피드백이 각 에이전트에 반영되었습니다._")
