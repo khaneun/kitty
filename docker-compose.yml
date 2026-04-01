@@ -7,8 +7,30 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+      - ./feedback:/app/feedback
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/host/kitty
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "5"
+
+  monitor:
+    build: ./monitor
+    container_name: kitty-monitor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/logs:ro          # kitty 로그 읽기 전용
+      - ./monitor-data:/data     # SQLite DB 영속 저장
+    environment:
+      - MONITOR_PASSWORD=${MONITOR_PASSWORD:-kitty}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
