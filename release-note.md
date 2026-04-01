@@ -2,6 +2,57 @@
 
 ---
 
+## v1.2.0 — 2026-04-01
+
+### 신규 기능
+
+**에이전트 채팅 탭 💬** (`monitor/app.py`, `kitty/agents/base.py`, `kitty/main.py`)
+
+모니터 대시보드에 5번째 탭 추가. 각 에이전트에게 자유롭게 질문할 수 있음.
+에이전트 선택 드롭다운, 채팅 히스토리, 입력창(Enter 전송 / Shift+Enter 줄바꿈)으로 구성.
+
+- `BaseAgent.chat(message, context)` 메서드 추가 — trading `_conversation`을 오염시키지 않는 one-shot AI 호출 (Anthropic / OpenAI / Gemini 모두 지원)
+- `kitty/main.py`: `_save_agent_context()` — 각 에이전트 실행 후 마지막 출력을 `logs/agent_context.json`에 저장
+- `kitty/main.py`: `_chat_handler(agents_map)` — 백그라운드 태스크, `commands/chat/req_*.json` 2초 폴링 → 해당 에이전트 컨텍스트 로딩 → `chat()` 호출 → `res_{id}.json` 기록
+- `monitor/app.py`: `POST /api/chat` — 질문 파일 생성 후 id 반환
+- `monitor/app.py`: `GET /api/chat/{id}` — 응답 파일 폴링 (최대 60초 대기)
+
+**포트폴리오 현황 표시** (`kitty/utils/portfolio.py`, `monitor/app.py`)
+
+성적표 탭 상단에 현재 주식 포트폴리오 실시간 표시.
+총평가금액·평가손익·주문가능현금 카드 3개 + 보유 종목 테이블 (종목명/코드, 수량, 평균단가, 현재가, 수익률, 평가금액).
+
+- `kitty/utils/portfolio.py`: 포트폴리오 출력 시 `logs/portfolio_snapshot.json` 자동 저장 (ts, trading_mode, available_cash, total_eval, total_pnl, holdings)
+- `monitor/app.py`: `GET /api/portfolio` — snapshot 반환
+- `monitor/app.py`: `loadPortfolio()` JS 함수 — GNB 모드 셀렉터와 자동 동기화
+
+**GNB 모드 셀렉터** (`monitor/app.py`)
+
+모니터 헤더에 paper/live 전환 콤보박스 추가.
+live 전환 시 확인 다이얼로그 필수, 전환 요청은 `commands/mode_request.json`을 통해 kitty-trader에 전달.
+포트폴리오 로딩 시 현재 모드가 셀렉터에 자동 반영됨.
+
+**파일 기반 IPC 채널 추가** (`start.sh`, `docker-compose.yml`)
+
+kitty-trader ↔ kitty-monitor 간 양방향 통신을 위한 `commands/` 공유 볼륨 추가.
+
+- kitty-trader: `commands:/app/commands` (읽기-쓰기)
+- kitty-monitor: `commands:/commands` (읽기-쓰기)
+
+### 버그 수정
+
+**Telegram `/deploy` 볼륨 누락** (`kitty/telegram/bot.py`)
+
+`/deploy` 명령으로 컨테이너를 재시작할 때 `feedback`·`token_usage` 볼륨 마운트가 빠져 있어 재시작 후 피드백·토큰 데이터가 초기화되던 문제 수정.
+
+**kitty 시작 실패 루프** (`kitty/main.py`)
+
+EC2 부팅 직후 네트워크 미준비 상태에서 `reporter.start_polling()` 호출이 예외를 던지면 프로세스가 죽고 재시작을 반복하던 문제 수정.
+- `start_polling()` 최대 5회 재시도, 실패마다 10×n 초 대기
+- 시작 시 `print_portfolio_and_balance()` 호출을 try/except로 감싸 KIS API 일시 오류로 인한 크래시 방지
+
+---
+
 ## v1.1.0 — 2026-04-01
 
 ### 신규 기능

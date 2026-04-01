@@ -74,8 +74,11 @@
 | 장 외 분석 | 08:50~09:00 분석 실행, 주문은 09:00 이후만 허용 |
 | 에이전트 자기개선 | 장 마감 후 성과 평가 → 피드백 누적 → system_prompt 자동 반영 |
 | AWS 자동 스케줄 | EventBridge로 EC2 장 시작 전 자동 켜기/끄기 |
-| 모니터링 대시보드 | kitty-monitor (포트 8080) — 4탭 모바일 UI로 상태·에러·성적표·토큰 통합 조회 |
+| 모니터링 대시보드 | kitty-monitor (포트 8080) — 5탭 모바일 UI로 상태·에러·성적표·토큰·채팅 통합 조회 |
+| 포트폴리오 스냅샷 | 매 사이클 후 portfolio_snapshot.json 저장, 모니터 성적표 탭에 실시간 표시 |
 | 토큰 사용량 추적 | AI 호출마다 token_usage/에 기록, 모델별 USD 비용 자동 추산 |
+| 에이전트 채팅 | 모니터에서 각 에이전트에 직접 질문 — 판단 근거·분석 내용 실시간 문답 |
+| GNB 모드 셀렉터 | 모니터 헤더에서 paper/live 전환, 포트폴리오 현황과 연동 |
 
 ---
 
@@ -102,12 +105,12 @@ kitty/
 │   └── bot.py                 # Telegram 봇 (20개 명령어)
 ├── utils/
 │   ├── logger.py              # 로깅 설정
-│   └── portfolio.py           # 포트폴리오·잔고 출력 유틸
+│   └── portfolio.py           # 포트폴리오·잔고 출력 유틸 (portfolio_snapshot.json 저장)
 ├── config.py                  # 환경 설정 (Pydantic)
-├── main.py                    # 메인 루프
+├── main.py                    # 메인 루프 (채팅 핸들러 포함)
 └── report.py                  # 일별 JSON 리포트
 monitor/
-├── app.py                     # FastAPI 모니터링 서버 (4탭 대시보드 + SQLite)
+├── app.py                     # FastAPI 모니터링 서버 (5탭 대시보드 + SQLite)
 ├── requirements.txt           # fastapi, uvicorn, httpx
 └── Dockerfile                 # kitty-monitor 이미지
 start.sh                       # EC2 부팅 스크립트 (git pull → Secrets 로딩 → Docker 빌드)
@@ -148,6 +151,8 @@ docker run -d \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/feedback:/app/feedback \
   -v $(pwd)/token_usage:/app/token_usage \
+  -v $(pwd)/commands:/app/commands \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   kitty-trader
 
 # kitty-monitor (포트 8080)
@@ -158,6 +163,7 @@ docker run -d \
   -v $(pwd)/logs:/logs:ro \
   -v $(pwd)/feedback:/feedback:ro \
   -v $(pwd)/token_usage:/token_usage:ro \
+  -v $(pwd)/commands:/commands \
   -v $(pwd)/monitor-data:/data \
   -e MONITOR_PASSWORD=kitty \
   -p 8080:8080 \
@@ -280,10 +286,11 @@ EC2 시작
       → AWS Secrets Manager에서 시크릿 로딩
       → Docker 빌드 (캐시 활용)
       → kitty-trader 컨테이너 시작
-          → logs/, feedback/, token_usage/ 볼륨 마운트
+          → logs/, feedback/, token_usage/, commands/ 볼륨 마운트
           → /var/run/docker.sock 마운트 (Telegram AWS 제어용)
       → kitty-monitor 컨테이너 시작 (포트 8080)
           → logs/, feedback/, token_usage/ 읽기 전용 마운트
+          → commands/ 읽기-쓰기 마운트 (모드 전환·채팅 IPC 채널)
           → monitor-data/ (SQLite DB 영속 보관)
 ```
 
@@ -428,8 +435,9 @@ http://<EC2-IP>:8080
 |----|----------|
 | 🏥 상태 | ok/warning/critical 배지, 1시간 에러 건수, 마지막 로그 시각, 최근 에러 5건 |
 | 📋 에러 | 14일 에러 추이 차트, 날짜·레벨·키워드 필터, 로그 전문 조회 |
-| 🤖 성적표 | 에이전트별 최신 점수 + 7일 미니 바, 날짜별 히트맵 |
+| 🤖 성적표 | 포트폴리오 현황 (총평가·손익·현금·보유 종목 테이블) + 에이전트별 점수 카드 + 히트맵 |
 | 🔢 토큰 | 오늘 토큰·비용, 에이전트별 누적 바 차트, 14일 일별 추이 |
+| 💬 채팅 | 에이전트 선택 후 자유 질문 — 최근 판단 컨텍스트 기반 답변 |
 
 ### 환경 변수 (kitty-monitor)
 
@@ -440,6 +448,16 @@ http://<EC2-IP>:8080
 | `TELEGRAM_CHAT_ID` | — | 알림 수신 Chat ID (선택) |
 | `POLL_SEC` | `15` | 로그 파일 폴링 간격 (초) |
 | `RETAIN_DAYS` | `30` | SQLite 에러 보관 기간 (일) |
+
+### 파일 기반 IPC (`commands/` 공유 볼륨)
+
+kitty-monitor와 kitty-trader는 `commands/` 디렉터리를 통해 양방향으로 통신합니다.
+
+| 파일 | 방향 | 용도 |
+|------|------|------|
+| `commands/mode_request.json` | monitor → kitty | paper/live 모드 전환 요청 |
+| `commands/chat/req_{id}.json` | monitor → kitty | 에이전트 질문 요청 |
+| `commands/chat/res_{id}.json` | kitty → monitor | 에이전트 답변 응답 |
 
 ### Telegram 알림 조건
 
