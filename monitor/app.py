@@ -650,10 +650,28 @@ table.log tr:hover td{background:#161b22}
 .recent-err:last-child{border-bottom:none}
 .recent-err .ts{color:#484f58;flex-shrink:0;white-space:nowrap}
 .recent-err .msg{color:#c9d1d9;word-break:break-word}
-/* 채팅 탭 */
-.chat-agent-sel{width:100%;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:8px 10px;font-size:13px;margin-bottom:10px;outline:none}
+/* 서브탭 (관리 영역) */
+.subtabs{display:flex;background:#0d1117;border-bottom:1px solid #21262d;position:sticky;top:83px;z-index:98;overflow-x:auto}
+.subtab{padding:7px 16px;font-size:11px;color:#484f58;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0;letter-spacing:.3px}
+.subtab.active{color:#c9d1d9;border-bottom-color:#58a6ff}
+/* FAB 채팅 버튼 */
+.fab{position:fixed;bottom:22px;right:18px;z-index:150;width:52px;height:52px;border-radius:50%;background:#238636;border:none;color:#fff;font-size:22px;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;transition:transform .15s,background .15s}
+.fab:hover{transform:scale(1.08);background:#2ea043}
+body{padding-bottom:80px}
+/* 채팅 팝업 */
+.chat-popup{position:fixed;inset:0;z-index:190;display:flex;flex-direction:column;justify-content:flex-end;pointer-events:none}
+.chat-popup.open{pointer-events:auto}
+.chat-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);opacity:0;transition:opacity .25s;cursor:pointer}
+.chat-popup.open .chat-backdrop{opacity:1}
+.chat-panel{position:relative;background:#161b22;border-top:1px solid #30363d;border-radius:16px 16px 0 0;display:flex;flex-direction:column;max-height:78vh;transform:translateY(100%);transition:transform .28s cubic-bezier(.4,0,.2,1)}
+.chat-popup.open .chat-panel{transform:translateY(0)}
+.chat-drag{width:40px;height:4px;background:#30363d;border-radius:2px;margin:10px auto 0;flex-shrink:0}
+.chat-panel-head{display:flex;align-items:center;gap:8px;padding:10px 14px 10px;border-bottom:1px solid #21262d;flex-shrink:0}
+.chat-panel-title{font-size:13px;font-weight:600;color:#f0f6fc;flex:1}
+.chat-close{background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;padding:2px 4px;line-height:1}
+.chat-agent-sel{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:5px 8px;font-size:12px;outline:none;cursor:pointer}
 .chat-agent-sel:focus{border-color:#58a6ff}
-.chat-history{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px;min-height:280px;max-height:420px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:10px}
+.chat-history{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px;min-height:160px}
 .chat-msg{display:flex;flex-direction:column;gap:3px;max-width:92%}
 .chat-msg.user{align-self:flex-end;align-items:flex-end}
 .chat-msg.assistant{align-self:flex-start;align-items:flex-start}
@@ -661,9 +679,9 @@ table.log tr:hover td{background:#161b22}
 .chat-msg.user .chat-bubble{background:#1c4a7a;color:#cae0f9;border-bottom-right-radius:3px}
 .chat-msg.assistant .chat-bubble{background:#21262d;color:#c9d1d9;border-bottom-left-radius:3px}
 .chat-meta{font-size:10px;color:#484f58;padding:0 2px}
-.chat-thinking{color:#484f58;font-size:12px;font-style:italic;padding:8px 4px;animation:blink 1.4s infinite}
-.chat-input-row{display:flex;gap:8px;align-items:flex-end}
-.chat-input{flex:1;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:8px 10px;font-size:13px;resize:none;min-height:40px;max-height:120px;outline:none;font-family:inherit}
+.chat-thinking{color:#484f58;font-size:12px;font-style:italic;padding:4px 2px;animation:blink 1.4s infinite}
+.chat-input-row{display:flex;gap:8px;align-items:flex-end;padding:10px 14px 18px;border-top:1px solid #21262d;flex-shrink:0}
+.chat-input{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:8px;padding:8px 10px;font-size:13px;resize:none;min-height:40px;max-height:100px;outline:none;font-family:inherit;line-height:1.5}
 .chat-input:focus{border-color:#58a6ff}
 </style>
 </head>
@@ -680,15 +698,17 @@ table.log tr:hover td{background:#161b22}
 </header>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('health')">🏥 상태</div>
-  <div class="tab" onclick="switchTab('errors')">📋 에러</div>
-  <div class="tab" onclick="switchTab('agents')">🤖 성적표</div>
-  <div class="tab" onclick="switchTab('tokens')">🔢 토큰</div>
-  <div class="tab" onclick="switchTab('chat')">💬 채팅</div>
+  <div class="tab active" id="main-tab-agents" onclick="switchMain('agents')">🤖 성적표</div>
+  <div class="tab" id="main-tab-admin" onclick="switchMain('admin')">⚙️ 관리</div>
+</div>
+<div class="subtabs" id="subtabs" style="display:none">
+  <div class="subtab active" id="sub-tab-health" onclick="switchAdmin('health')">🏥 상태</div>
+  <div class="subtab" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
+  <div class="subtab" id="sub-tab-tokens" onclick="switchAdmin('tokens')">🔢 토큰</div>
 </div>
 
-<!-- ══ 상태 탭 ══ -->
-<div id="tab-health" class="tab-content active">
+<!-- ══ 상태 (관리 서브) ══ -->
+<div id="tab-health" class="tab-content">
 <div class="wrap">
   <div id="status-badge" class="status-badge status-ok">⏳ 로딩 중...</div>
   <div class="cards">
@@ -741,8 +761,8 @@ table.log tr:hover td{background:#161b22}
 </div>
 </div>
 
-<!-- ══ 에이전트 성적표 탭 ══ -->
-<div id="tab-agents" class="tab-content">
+<!-- ══ 에이전트 성적표 (메인) ══ -->
+<div id="tab-agents" class="tab-content active">
 <div class="wrap">
   <!-- 포트폴리오 현황 -->
   <div class="section">
@@ -797,30 +817,40 @@ table.log tr:hover td{background:#161b22}
 </div>
 </div>
 
-<!-- ══ 채팅 탭 ══ -->
-<div id="tab-chat" class="tab-content">
-<div class="wrap">
-  <div class="section">
-    <div class="sec-title">에이전트 채팅</div>
-    <select id="chat-agent" class="chat-agent-sel">
-      <option value="섹터분석가">섹터분석가</option>
-      <option value="종목발굴가">종목발굴가</option>
-      <option value="종목평가가">종목평가가</option>
-      <option value="자산운용가">자산운용가</option>
-      <option value="매수실행가">매수실행가</option>
-      <option value="매도실행가">매도실행가</option>
-      <option value="투자성향관리자">투자성향관리자</option>
-    </select>
+<!-- FAB 채팅 버튼 -->
+<button class="fab" id="fab-chat" onclick="openChat()" title="에이전트 채팅">💬</button>
+
+<!-- 채팅 팝업 -->
+<div class="chat-popup" id="chat-popup">
+  <div class="chat-backdrop" onclick="closeChat()"></div>
+  <div class="chat-panel">
+    <div class="chat-drag"></div>
+    <div class="chat-panel-head">
+      <span class="chat-panel-title">에이전트 채팅</span>
+      <select id="chat-agent" class="chat-agent-sel">
+        <option value="섹터분석가">섹터분석가</option>
+        <option value="종목발굴가">종목발굴가</option>
+        <option value="종목평가가">종목평가가</option>
+        <option value="자산운용가">자산운용가</option>
+        <option value="매수실행가">매수실행가</option>
+        <option value="매도실행가">매도실행가</option>
+        <option value="투자성향관리자">투자성향관리자</option>
+      </select>
+      <button class="chat-close" onclick="closeChat()">✕</button>
+    </div>
     <div class="chat-history" id="chat-history">
-      <div style="text-align:center;color:#484f58;font-size:12px;padding:20px">에이전트를 선택하고 질문해보세요.<br>예: "왜 그런 판단을 했나요?", "분석 근거를 설명해줘"</div>
+      <div id="chat-placeholder" style="text-align:center;color:#484f58;font-size:12px;padding:24px 16px">
+        에이전트를 선택하고 질문해보세요.<br>
+        <span style="color:#30363d;font-size:11px;margin-top:6px;display:block">예: "왜 그런 판단을 했나요?" · "분석 근거 설명해줘"</span>
+      </div>
     </div>
     <div class="chat-input-row">
-      <textarea id="chat-input" class="chat-input" rows="1" placeholder="질문 입력 (Enter: 전송 / Shift+Enter: 줄바꿈)"
+      <textarea id="chat-input" class="chat-input" rows="1"
+        placeholder="질문 입력  (Enter: 전송 / Shift+Enter: 줄바꿈)"
         onkeydown="onChatKey(event)" oninput="autoResize(this)"></textarea>
       <button class="btn btn-pri" id="chat-send-btn" onclick="sendChat()">전송</button>
     </div>
   </div>
-</div>
 </div>
 
 <!-- 모달 -->
@@ -833,17 +863,44 @@ table.log tr:hover td{background:#161b22}
 </div>
 
 <script>
-const TAB_NAMES = ['health','errors','agents','tokens','chat'];
+// ── 탭 전환 ─────────────────────────────────────────────
+let _adminTab = 'health';
 
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i)=>{
-    t.classList.toggle('active', TAB_NAMES[i]===name);
+function switchMain(name) {
+  const isAgents = name === 'agents';
+  document.getElementById('main-tab-agents').classList.toggle('active', isAgents);
+  document.getElementById('main-tab-admin').classList.toggle('active', !isAgents);
+  document.getElementById('subtabs').style.display = isAgents ? 'none' : 'flex';
+  ['health','errors','tokens','agents'].forEach(n => {
+    document.getElementById('tab-'+n).classList.remove('active');
   });
-  document.querySelectorAll('.tab-content').forEach(c=>{
-    c.classList.toggle('active', c.id==='tab-'+name);
+  if(isAgents) {
+    document.getElementById('tab-agents').classList.add('active');
+    loadPortfolio(); loadAgentScores();
+  } else {
+    switchAdmin(_adminTab);
+  }
+}
+
+function switchAdmin(name) {
+  _adminTab = name;
+  ['health','errors','tokens'].forEach(n => {
+    document.getElementById('sub-tab-'+n).classList.toggle('active', n===name);
+    document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
-  if(name==='agents'){ loadPortfolio(); loadAgentScores(); }
+  document.getElementById('tab-agents').classList.remove('active');
+  if(name==='health'){ loadHealth(); loadStats(); }
+  if(name==='errors'){ loadStats(); loadErrors(); }
   if(name==='tokens') loadTokens();
+}
+
+// ── 채팅 팝업 ────────────────────────────────────────────
+function openChat() {
+  document.getElementById('chat-popup').classList.add('open');
+  document.getElementById('chat-input').focus();
+}
+function closeChat() {
+  document.getElementById('chat-popup').classList.remove('open');
 }
 
 const today = new Date().toISOString().slice(0,10);
@@ -1238,14 +1295,23 @@ async function pollChatResponse(id, agent) {
 }
 
 // ── 초기화 & 자동 갱신 ──────────────────────────────────
-loadHealth();
-loadStats();
-loadErrors();
-setInterval(()=>{ loadHealth(); loadStats(); loadErrors(); }, 30000);
+// 기본 뷰: 성적표
+loadPortfolio();
+loadAgentScores();
+
+// 성적표 60초 자동 갱신
 setInterval(()=>{
-  if(document.getElementById('tab-agents').classList.contains('active')){ loadPortfolio(); loadAgentScores(); }
-  if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
+  if(document.getElementById('tab-agents').classList.contains('active')){
+    loadPortfolio(); loadAgentScores();
+  }
 }, 60000);
+
+// 관리 탭 30초 자동 갱신 (열려 있을 때만)
+setInterval(()=>{
+  if(document.getElementById('tab-health').classList.contains('active')){ loadHealth(); loadStats(); }
+  if(document.getElementById('tab-errors').classList.contains('active')){ loadStats(); loadErrors(); }
+  if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
+}, 30000);
 </script>
 </body>
 </html>
