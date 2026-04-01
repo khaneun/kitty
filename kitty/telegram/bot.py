@@ -111,6 +111,7 @@ class TelegramReporter:
             ("resume",     self._cmd_resume),
             ("stop",       self._cmd_stop),
             ("logs",       self._cmd_logs),
+            ("dashboard",  self._cmd_dashboard),
             ("deploy",     self._cmd_deploy),
             ("restart",    self._cmd_restart),
             ("shutdown",   self._cmd_shutdown),
@@ -153,6 +154,8 @@ class TelegramReporter:
             "*수동 매매*\n"
             "/buy <종목코드> <수량>  — 수동 매수\n"
             "/sell <종목코드> <수량> — 수동 매도\n\n"
+            "*모니터*\n"
+            "/dashboard   — 모니터 대시보드 URL\n\n"
             "*AWS 제어*\n"
             "/logs [n]    — 최근 로그 n줄 (기본 50)\n"
             "/deploy      — 코드 재배포 (git pull + 재빌드)\n"
@@ -429,6 +432,22 @@ class TelegramReporter:
         # 프로세스 종료
         import os, signal
         os.kill(os.getpid(), signal.SIGINT)
+
+    async def _cmd_dashboard(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        host = settings.monitor_host
+        if not host:
+            try:
+                import urllib.request
+                host = urllib.request.urlopen(
+                    "http://169.254.169.254/latest/meta-data/public-ipv4", timeout=2
+                ).read().decode().strip()
+            except Exception:
+                host = "EC2-IP"
+        url = f"http://{host}:{settings.monitor_port}"
+        await update.message.reply_text(  # type: ignore[union-attr]
+            f"📊 *Kitty Monitor*\n{url}",
+            parse_mode="Markdown",
+        )
 
     # ---- AWS 제어 명령어 ----
 

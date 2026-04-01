@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., description="텔레그램 봇 토큰")
     telegram_chat_id: str = Field(..., description="텔레그램 채팅 ID")
 
+    # 모니터 대시보드
+    monitor_host: str = Field(default="", description="모니터 호스트 (비워두면 EC2 퍼블릭 IP 자동 조회)")
+    monitor_port: int = Field(default=8080, description="모니터 포트")
+
     # 매매 설정
     trading_mode: TradingMode = Field(default=TradingMode.PAPER)
     max_buy_amount: int = Field(default=1_000_000, description="1회 최대 매수금액 (원)")
