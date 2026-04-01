@@ -52,7 +52,7 @@ def get_feedback_prompt(agent_name: str) -> str:
     for e in recent:
         score = e.get("score", "?")
         summary = e.get("summary", "")
-        lines.append(f"• {e['date']} (점수 {score}/10): {summary}")
+        lines.append(f"• {e['date']} (점수 {score}/100): {summary}")
 
     improvements = [e["improvement"] for e in recent[-3:] if e.get("improvement")]
     if improvements:

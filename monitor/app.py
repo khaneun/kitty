@@ -958,8 +958,8 @@ const badge = lvl => {
   const cls = lvl==='ERROR'?'ERR-b':lvl==='WARNING'?'WARN-b':'CRIT-b';
   return `<span class="badge ${cls}">${lvl}</span>`;
 };
-const scoreColor = s => s>=7?'#3fb950':s>=4?'#d29922':'#f85149';
-const scoreBg    = s => s>=7?'s-hi':s>=4?'s-mid':'s-lo';
+const scoreColor = s => s>=70?'#3fb950':s>=40?'#d29922':'#f85149';
+const scoreBg    = s => s>=70?'s-hi':s>=40?'s-mid':'s-lo';
 const fmtNum = n => n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n);
 
 // ── 상태 탭 ─────────────────────────────────────────────
@@ -1182,14 +1182,14 @@ async function loadAgentScores() {
         <div class="s-bar-row">
           <div class="s-bar-dt">${e.date.slice(5)}</div>
           <div class="s-bar-track">
-            <div class="s-bar-fill" style="width:${e.score*10}%;background:${scoreColor(e.score)}"></div>
+            <div class="s-bar-fill" style="width:${e.score}%;background:${scoreColor(e.score)}"></div>
           </div>
           <div class="s-bar-n">${e.score}</div>
         </div>`).join('');
       return `
         <div class="agent-card">
           <div class="agent-name">${agent}</div>
-          <div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/10</span></div>
+          <div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div>
           <div class="agent-date">${latest.date}</div>
           <div class="score-bars">${bars}</div>
         </div>`;
@@ -1261,7 +1261,7 @@ function showModal(ts, level, module, msg) {
   document.getElementById('modal').classList.add('show');
 }
 function showAgentModal(agent, date, score, summary, improvement) {
-  document.getElementById('modal-title').textContent = `${agent} — ${date} (${score}/10)`;
+  document.getElementById('modal-title').textContent = `${agent} — ${date} (${score}/100)`;
   document.getElementById('modal-body').textContent  =
     `📊 요약\n${summary||'없음'}\n\n💡 개선 포인트\n${improvement||'없음'}`;
   document.getElementById('modal').classList.add('show');

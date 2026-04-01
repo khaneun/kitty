@@ -261,11 +261,11 @@ async def run_trading_cycle(
 def _format_eval_summary(results: dict) -> str:
     """성과 평가 결과 → 텔레그램 메시지"""
     lines = ["📊 *오늘의 에이전트 성과 평가*\n"]
-    score_emoji = {range(0, 4): "🔴", range(4, 7): "🟡", range(7, 11): "🟢"}
+    score_emoji = {range(0, 40): "🔴", range(40, 70): "🟡", range(70, 101): "🟢"}
     for agent_name, entry in results.items():
-        score = entry.get("score", 5)
+        score = entry.get("score", 50)
         emoji = next((e for r, e in score_emoji.items() if score in r), "⚪")
-        lines.append(f"{emoji} *{agent_name}* `{score}/10`")
+        lines.append(f"{emoji} *{agent_name}* `{score}/100`")
         lines.append(f"   {entry.get('summary', '')}")
         if entry.get("improvement"):
             lines.append(f"   💡 _{entry['improvement']}_")

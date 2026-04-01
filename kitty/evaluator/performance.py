@@ -66,7 +66,7 @@ class PerformanceEvaluator:
                 }
                 append_entry(agent_name, entry)
                 results[agent_name] = entry
-                logger.info(f"[평가] {agent_name}: {entry['score']}/10 — {entry['summary']}")
+                logger.info(f"[평가] {agent_name}: {entry['score']}/100 — {entry['summary']}")
             except Exception as e:
                 logger.error(f"[평가] {agent_name} 평가 오류: {e}")
 
@@ -134,7 +134,7 @@ class PerformanceEvaluator:
 
         acc = hits / total
         return {
-            "score": min(10, round(acc * 10 + 1)),  # +1 보정으로 5 이상부터 시작
+            "score": min(100, round(acc * 100 + 10)),  # +10 보정으로 50 이상부터 시작
             "accuracy": round(acc, 2),
             "hits": hits, "total": total,
             "sector_details": sector_details,
@@ -165,13 +165,13 @@ class PerformanceEvaluator:
         avg_return = sum(buy_changes) / len(buy_changes) if buy_changes else None
         sell_acc = sell_correct / sell_total if sell_total > 0 else None
 
-        score = 5
+        score = 50
         if avg_return is not None:
-            if avg_return > 2:     score = 9
-            elif avg_return > 0.5: score = 7
-            elif avg_return > 0:   score = 6
-            elif avg_return > -1:  score = 4
-            else:                  score = 2
+            if avg_return > 2:     score = 90
+            elif avg_return > 0.5: score = 70
+            elif avg_return > 0:   score = 60
+            elif avg_return > -1:  score = 40
+            else:                  score = 20
 
         return {
             "score": score,
@@ -206,7 +206,7 @@ class PerformanceEvaluator:
 
         acc = correct / total
         return {
-            "score": round(acc * 10),
+            "score": round(acc * 100),
             "accuracy": round(acc, 2),
             "correct": correct, "total": total,
             "details": details,
@@ -232,12 +232,12 @@ class PerformanceEvaluator:
             return {}
 
         avg = sum(direction_scores) / len(direction_scores)
-        score = 5
-        if avg > 2:     score = 9
-        elif avg > 0.5: score = 7
-        elif avg >= 0:  score = 6
-        elif avg > -1:  score = 4
-        else:           score = 2
+        score = 50
+        if avg > 2:     score = 90
+        elif avg > 0.5: score = 70
+        elif avg >= 0:  score = 60
+        elif avg > -1:  score = 40
+        else:           score = 20
 
         return {
             "score": score,
@@ -269,7 +269,7 @@ class PerformanceEvaluator:
         # 시도는 했으나 체결 없으면 최저점
         if not efficiencies:
             return {
-                "score": 1,
+                "score": 10,
                 "filled_count": 0,
                 "failed_count": failed_count,
                 "avg_efficiency_pct": None,
@@ -277,11 +277,11 @@ class PerformanceEvaluator:
             }
 
         avg = sum(efficiencies) / len(efficiencies)
-        score = 5
-        if avg > 1:      score = 9
-        elif avg > 0:    score = 7
-        elif avg > -0.5: score = 5
-        else:            score = 3
+        score = 50
+        if avg > 1:      score = 90
+        elif avg > 0:    score = 70
+        elif avg > -0.5: score = 50
+        else:            score = 30
 
         return {
             "score": score,
@@ -314,7 +314,7 @@ class PerformanceEvaluator:
         # 시도는 했으나 체결 없으면 최저점
         if not efficiencies:
             return {
-                "score": 1,
+                "score": 10,
                 "filled_count": 0,
                 "failed_count": failed_count,
                 "avg_efficiency_pct": None,
@@ -322,11 +322,11 @@ class PerformanceEvaluator:
             }
 
         avg = sum(efficiencies) / len(efficiencies)
-        score = 5
-        if avg > 0.5:    score = 9
-        elif avg > 0:    score = 7
-        elif avg > -0.5: score = 5
-        else:            score = 3
+        score = 50
+        if avg > 0.5:    score = 90
+        elif avg > 0:    score = 70
+        elif avg > -0.5: score = 50
+        else:            score = 30
 
         return {
             "score": score,
@@ -344,6 +344,7 @@ class PerformanceEvaluator:
         prompt = (
             f"다음은 오늘 '{agent_name}' 에이전트의 성과 데이터입니다.\n"
             f"{json.dumps(metrics, ensure_ascii=False)}\n\n"
+            "점수는 0~100점 척도입니다 (100점 = 최고, 0점 = 최저).\n"
             "이 데이터를 바탕으로 아래 JSON 형식으로만 응답하세요:\n"
             '{"summary": "오늘 성과 한 줄 요약 (수치 포함, 50자 이내)", '
             '"improvement": "다음 거래에서 개선할 구체적인 행동 지침 (40자 이내)"}'
@@ -376,6 +377,6 @@ class PerformanceEvaluator:
             logger.warning(f"[평가] AI 피드백 생성 실패 ({agent_name}): {e}")
 
         return {
-            "summary": f"점수 {metrics.get('score', 5)}/10 달성",
+            "summary": f"점수 {metrics.get('score', 50)}/100 달성",
             "improvement": "추가 데이터 축적 후 분석 예정",
         }
