@@ -2,6 +2,117 @@
 
 ---
 
+## v1.7.0 — 2026-04-01
+
+### 피드백 루프 강화
+
+**의사결정 상세 기록 추가** (`kitty/evaluator/performance.py`)
+
+각 에이전트 평가 시 개별 의사결정 성패를 `✓`/`✗` 기호로 기록한 `decision_details` 문자열을 AI 피드백 생성 프롬프트에 전달.
+AI가 구체적인 케이스를 참고해 더 정확한 피드백을 생성할 수 있도록 개선.
+
+- 에이전트별 `_eval_*` 함수에서 `detail_lines` 리스트 생성 및 `decision_details` 반환
+- `_ai_feedback(agent_name, metrics, decision_details="")` — 의사결정 상세 섹션 포함 프롬프트
+- AI 피드백 출력 필드 추가: `good_pattern` (80자, 유지할 성공 패턴)
+- `max_tokens` 200 → 400 (good_pattern 필드 생성 공간 확보)
+- AI 피드백 생성 시 Gemini 모델 지원 추가
+- 점수 기본값 fallback: 5 → 50 (0~100 스케일에 맞게 조정)
+
+**피드백 저장소 전면 개편** (`kitty/feedback/store.py`)
+
+- `MAX_ENTRIES`: 10일 → 14일 (2주치 보관)
+- `PROMPT_ENTRIES`: 최근 5일 system_prompt 주입
+- `get_feedback_prompt()` 완전 재작성:
+  - 점수 추이 라인 (최근 7일) + 📈 개선 중 / 📉 하락 중 / ➡️ 유지 아이콘
+  - 각 항목에 `good_pattern` (✅ 유지) + `improvement` (💡 개선) 표시
+  - 하단에 `[최우선 개선 과제]` 섹션 (최근 3일 중복 제거)
+
+**투자성향 장 마감 후 자동 조정** (`kitty/agents/tendency.py`, `kitty/main.py`)
+
+- `TendencyAgent.update_strategy(eval_results)`: 장 마감 성과 평가 후 AI가 내일 각 차원 레벨을 조정
+- 1 사이클 최대 ±2 레벨 제한, 결과는 `logs/tendency_state.json`에 즉시 저장
+- `main.py`: `reload_feedback()` 직후 `tendency_agent.update_strategy(results)` 자동 호출
+
+---
+
+## v1.6.0 — 2026-04-01
+
+### 수익 극대화 파이프라인
+
+**섹터분석가 실시간 시장 데이터 기반 분석** (`kitty/agents/sector_analyst.py`, `kitty/broker/kis.py`, `kitty/main.py`)
+
+기존 AI 자체 추론/뉴스 기반 섹터 분석을 실제 시장 데이터 기반으로 전환.
+추측이나 외부 뉴스 기반 판단을 금지하고, 실측 수치만으로 판단하도록 시스템 프롬프트 변경.
+
+- `kis.py`: `get_volume_rank(count=20)` 추가 — KIS TR `FHPST01710000`으로 거래량 상위 종목 조회 (symbol, name, current_price, change_rate, volume, turnover)
+- `main.py`: `_BAROMETER_SYMBOLS` — 시장 체온계 ETF·종목 10개 (코스피200, 코스닥150, 반도체, 2차전지, 바이오 등)
+- `main.py`: `_collect_market_data(broker)` — 바로미터 시세 + 거래량 상위 20개 수집 (사이클 step 1.5)
+- `sector_analyst.py`: `run()` — `market_data` 컨텍스트 수신, 상승/하락 종목 수·평균 등락률·거래량 상위 포함 프롬프트 생성
+
+**하드코딩 임계값 전면 제거** (`kitty/agents/stock_evaluator.py`, `stock_picker.py`, `asset_manager.py`)
+
+각 에이전트 시스템 프롬프트의 고정 수치를 제거하고 투자성향관리자 지침을 단일 진실 출처로 통일.
+
+- `stock_evaluator.py`: 손절 -5%, 익절 +15%, 종목 최대 비중 20% 제거 → "투자성향 지침 따름" 참조
+- `stock_picker.py`: 하드코딩 임계값 제거, 유동성 기준 명시 (거래량 10만주 미만 또는 거래대금 10억 미만 제외)
+- `asset_manager.py`: 잔고 70%/종목 20% 제거 → 투자성향 지침 참조, `max_position_size` 파라미터 추가
+- 각 에이전트 기본값 fallback 주석 추가 (지침 없는 경우에도 동작)
+
+**거래량 상위 종목 유동성 연동**
+
+- `stock_picker.py`: `volume_leaders` 컨텍스트 수신, 프롬프트에 유동성 참고 섹션 추가
+- `asset_manager.py`: `quotes_text`에 거래량 포함
+
+---
+
+## v1.5.0 — 2026-04-01
+
+### 에이전트 점수 0~100 통일
+
+모든 에이전트 평가 점수를 기존 0~10 (또는 구간별 2~9) 스케일에서 **0~100 통일**.
+
+- `kitty/evaluator/performance.py`: 각 `_eval_*` 함수 점수 범위 0~100으로 재조정
+  - 섹터분석가: 적중률 × 100
+  - 종목발굴가: 수익률 구간별 20~90점
+  - 종목평가가: 정확도 × 100
+  - 자산운용가: 방향성 구간별 20~90점
+  - 매수/매도실행가: 구간별 30~90점, 체결 0건 시 10점
+- `kitty/feedback/store.py`: 점수 추이 비교 임계값 ±5점(0~100 기준)으로 조정
+- `monitor/app.py`:
+  - 점수 색상 임계값: 4/7 → 40/70
+  - 점수 바 너비: `score * 10` → `score` (0~100% 직접 매핑)
+  - 히트맵 셀 점수 표시: `/10` → `/100`
+- `kitty/main.py`: `_format_eval_summary()` 이모지 구간 40/70 기준으로 변경
+- `kitty/agents/tendency.py`: `update_strategy()` 판단 기준 0~100 기준으로 조정
+
+---
+
+## v1.4.0 — 2026-04-01
+
+### 투자성향관리자 5차원 6단계 레벨 시스템
+
+기존 3가지 고정 프로필(공격적/균형/보수적)을 **5개 차원 × 6단계 레벨** 독립 조정 방식으로 전면 교체.
+각 차원을 독립적으로 조정해 다양한 투자 성향 조합을 표현할 수 있음 (예: 익절은 공격적이면서 손절은 보수적).
+
+**`kitty/agents/tendency.py` 완전 재작성**
+
+- 5개 차원: `take_profit`, `stop_loss`, `cash`, `max_weight`, `entry`
+- 6단계 레벨: L1(최공격적) ~ L6(최보수적) — 차원별 독립 값 테이블
+- 프리셋 3종: `aggressive`(L2 all), `balanced`(L4 위주), `conservative`(L5/L3 혼합)
+- 초기 레벨: 모든 차원 L2 (공격적)
+- `_build_directive()`: 현재 레벨 조합으로 지침 문자열 동적 생성
+- `update_strategy(eval_results)`: 장 마감 후 AI가 각 차원 레벨 조정 (±2 한도)
+- `_save_state()` / `_load_state()`: `logs/tendency_state.json` 영속 저장 (EC2 재시작에도 유지)
+- `profile` 프로퍼티: 현재 레벨 + 계산된 파라미터 값 딕셔너리 반환
+
+**모니터 성향 카드 개편** (`monitor/app.py`)
+
+- 기존 3개 파라미터 카드 → 5개 차원 격자(grid) 표시
+- 각 차원 셀에 레벨 배지(lv-1~lv-6 색상 코드) + 레벨명 + 현재 값 표시
+- `setDimCell()` JS 헬퍼 추가, `loadTendency()` 5차원 levels dict 파싱
+
+---
+
 ## v1.3.0 — 2026-04-01
 
 ### 신규 기능
