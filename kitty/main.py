@@ -14,6 +14,20 @@ import holidays
 _KST = ZoneInfo("Asia/Seoul")
 _kr_holidays = holidays.KR()
 
+# 시장 지표 심볼 (ETF + 대형 대표주)
+_BAROMETER_SYMBOLS = [
+    "069500",  # KODEX 200 (KOSPI 프록시)
+    "229200",  # KODEX 코스닥150
+    "005930",  # 삼성전자
+    "000660",  # SK하이닉스
+    "005380",  # 현대차
+    "035420",  # NAVER
+    "068270",  # 셀트리온
+    "006400",  # 삼성SDI
+    "105560",  # KB금융
+    "051910",  # LG화학
+]
+
 from kitty.agents import (
     AssetManagerAgent,
     BuyExecutorAgent,
@@ -29,6 +43,27 @@ from kitty.evaluator import PerformanceEvaluator
 from kitty.report import DailyReport
 from kitty.telegram import TelegramReporter
 from kitty.utils import logger, print_portfolio_and_balance, setup_logger
+
+
+async def _collect_market_data(broker: KISBroker) -> dict:
+    """실시간 시장 지표 + 거래량 상위 종목 수집"""
+    # 시장 지표 (ETF + 대형주)
+    barometers: list[dict] = []
+    for sym in _BAROMETER_SYMBOLS:
+        try:
+            q = await broker.get_quote(sym)
+            barometers.append(q.model_dump())
+        except Exception as e:
+            logger.debug(f"시장지표 {sym} 조회 실패: {e}")
+
+    # 거래량 상위 종목
+    volume_leaders: list[dict] = []
+    try:
+        volume_leaders = await broker.get_volume_rank(20)
+    except Exception as e:
+        logger.warning(f"거래량순위 조회 실패 (무시): {e}")
+
+    return {"barometers": barometers, "volume_leaders": volume_leaders}
 
 
 def _save_agent_context(agent_name: str, output: dict) -> None:
@@ -150,14 +185,25 @@ async def run_trading_cycle(
     total_asset_value = int(balance_summary.get("tot_evlu_amt", 0))
     logger.info(f"보유종목: {len(portfolio)}개 | 가용현금: {available_cash:,}원 | 총자산: {total_asset_value:,}원")
 
-    # 2. 섹터분석 (SectorAnalystAgent)
+    # 1.5. 실시간 시장 데이터 수집 (지표 + 거래량 순위)
+    market_data = await _collect_market_data(broker)
+    logger.info(
+        f"시장데이터: 지표 {len(market_data['barometers'])}개 | "
+        f"거래량순위 {len(market_data['volume_leaders'])}개"
+    )
+
+    # 2. 섹터분석 (SectorAnalystAgent) — 실시간 데이터 기반
     current_date = datetime.now(_KST).strftime("%Y-%m-%d")
-    analysis = await sector_analyst.run({"portfolio": portfolio, "current_date": current_date})
+    analysis = await sector_analyst.run({
+        "portfolio": portfolio,
+        "current_date": current_date,
+        "market_data": market_data,
+    })
     daily_report.record_analysis(analysis)
     reporter.update_analysis(analysis)
     _save_agent_context("섹터분석가", analysis)
 
-    # 3. 후보 종목 + 보유 종목 시세 조회
+    # 3. 후보 종목 + 보유 종목 + 거래량 상위 종목 시세 조회
     candidate_symbols: set[str] = set()
     for sector in analysis.get("sectors", []):
         for symbol in sector.get("candidate_symbols", []):
@@ -166,6 +212,11 @@ async def run_trading_cycle(
         pdno = holding.get("pdno", "")
         if pdno:
             candidate_symbols.add(pdno)
+    # 거래량 상위 종목도 후보에 추가 (유동성 있는 종목 보장)
+    for vl in market_data.get("volume_leaders", []):
+        sym = vl.get("symbol", "")
+        if sym:
+            candidate_symbols.add(sym)
 
     logger.info(f"시세 조회 대상: {sorted(candidate_symbols)}")
     quotes = []
@@ -188,7 +239,7 @@ async def run_trading_cycle(
     reporter.update_evaluation(stock_evaluation)
     _save_agent_context("종목평가가", stock_evaluation)
 
-    # 5. 종목발굴 (StockPickerAgent) - 신규 후보
+    # 5. 종목발굴 (StockPickerAgent) - 신규 후보 + 거래량 데이터
     new_candidates = await stock_picker.run({
         "analysis": analysis,
         "quotes": quotes,
@@ -196,6 +247,7 @@ async def run_trading_cycle(
         "available_cash": available_cash,
         "max_buy_amount": settings.max_buy_amount,
         "tendency_directive": tendency_directive,
+        "volume_leaders": market_data.get("volume_leaders", []),
     })
     daily_report.record_stock_picks(new_candidates)
     _save_agent_context("종목발굴가", new_candidates)
@@ -209,6 +261,7 @@ async def run_trading_cycle(
         "available_cash": available_cash,
         "total_asset_value": total_asset_value,
         "max_buy_amount": settings.max_buy_amount,
+        "max_position_size": settings.max_position_size,
         "tendency_directive": tendency_directive,
     })
     daily_report.record_asset_management(asset_plan)

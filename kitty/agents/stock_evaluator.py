@@ -11,21 +11,22 @@ SYSTEM_PROMPT = """당신은 포트폴리오 관리 전문가입니다.
 - 각 종목에 대해 추가매수(BUY_MORE) / 유지(HOLD) / 일부매도(PARTIAL_SELL) / 전량매도(SELL) 중 하나를 결정합니다
 
 평가 기준:
-1. 수익률 기반
-   - 손실 -5% 이하: 원칙적으로 손절(SELL) — 단, 섹터 전망이 강세이고 일시적 하락이면 HOLD 가능
-   - 수익 +15% 이상: 익절 검토 — 섹터 전망이 여전히 강세이면 PARTIAL_SELL(50%) 후 잔여 HOLD
-   - 수익 +30% 이상: 반드시 PARTIAL_SELL 이상 실행
+1. 수익률 기반 — 투자성향 지침의 익절/손절 기준을 따릅니다
+   - 지침의 손절 기준 이상 손실: SELL 적극 검토 (섹터 강세 + 일시적 하락이 명확할 때만 HOLD)
+   - 지침의 익절 기준 이상 수익: PARTIAL_SELL 또는 SELL 검토
+   - 익절 기준의 2배 이상 수익: 반드시 PARTIAL_SELL 이상 실행
+   ※ 투자성향 지침이 제공되지 않으면 익절 +10%, 손절 -5% 기본값 사용
 
 2. 섹터 전망 기반 (시장분석가 결과 활용)
-   - 해당 종목의 섹터가 bullish: 추가매수(BUY_MORE) 또는 유지(HOLD) 우선 고려
+   - 해당 종목의 섹터가 bullish: BUY_MORE 또는 HOLD 우선 고려
    - 해당 종목의 섹터가 bearish: 수익 중이면 PARTIAL_SELL, 손실 중이면 SELL 적극 검토
    - 해당 종목의 섹터가 neutral: 수익률 기준으로만 판단
 
-3. 추가매수 조건 (BUY_MORE)
+3. 추가매수 조건 (BUY_MORE) — 아래 모두 충족 시
    - 섹터 전망 bullish
-   - 현재 손실률이 -5% 이내 (물타기 아님)
-   - 해당 종목의 현재 등락률이 당일 +5% 미만 (과열 제외)
-   - 보유 비중이 전체 자산의 20% 미만
+   - 손절 기준 이내의 손실 (물타기 아님)
+   - 당일 등락률이 투자성향 지침의 진입기준 이내 (과열 제외)
+   - 투자성향 지침의 종목집중 비중 한도 이내
 
 출력 형식: JSON
 {
@@ -42,7 +43,7 @@ SYSTEM_PROMPT = """당신은 포트폴리오 관리 전문가입니다.
       "action": "HOLD|BUY_MORE|PARTIAL_SELL|SELL",
       "quantity": 추가매수 또는 매도 수량(HOLD이면 0),
       "price": 0,
-      "reason": "결정 근거 (수익률 + 섹터 전망 종합)"
+      "reason": "결정 근거 (투자성향 지침의 어떤 기준에 해당하는지 명시)"
     }
   ],
   "summary": "전체 포트폴리오 평가 요약"
@@ -61,7 +62,8 @@ class StockEvaluatorAgent(BaseAgent):
             "portfolio": 보유 종목 목록 (KIS balance output1),
             "quotes": 보유 종목 현재가 목록,
             "sector_analysis": SectorAnalystAgent 결과,
-            "max_buy_amount": 추가매수 시 최대 금액
+            "max_buy_amount": 추가매수 시 최대 금액,
+            "tendency_directive": 투자성향 지침 텍스트
         }
         """
         portfolio = context.get("portfolio", [])
@@ -98,6 +100,7 @@ class StockEvaluatorAgent(BaseAgent):
                 "current_price": current_price,
                 "pnl_rate": round(pnl_rate, 2),
                 "change_rate_today": quote.get("change_rate", 0),
+                "volume": quote.get("volume", 0),
             })
 
         tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
@@ -112,7 +115,7 @@ class StockEvaluatorAgent(BaseAgent):
 
 [추가매수 시 1회 최대 금액]: {max_buy:,}원
 
-각 보유 종목에 대해 섹터 전망과 수익률을 종합하여 평가해주세요.
+투자성향 지침에 명시된 익절/손절/종목집중 기준을 적용하여 각 종목을 평가하세요.
 JSON 형식으로 응답해주세요."""
 
         response = await self.think(prompt)

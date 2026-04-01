@@ -307,6 +307,47 @@ class KISBroker:
             logger.warning(f"주문 취소 실패: {data.get('msg1')}")
         return success
 
+    async def get_volume_rank(self, count: int = 20) -> list[dict[str, Any]]:
+        """거래량 상위 종목 조회 (TR: FHPST01710000)
+
+        Returns:
+            [{"symbol", "name", "current_price", "change_rate", "volume", "turnover"}, ...]
+        """
+        headers = await self._headers("FHPST01710000")
+        resp = await self._client.get(
+            f"{self._base_url}/uapi/domestic-stock/v1/quotations/volume-rank",
+            headers=headers,
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_COND_SCR_DIV_CODE": "20101",
+                "FID_INPUT_ISCD": "0000",
+                "FID_DIV_CLS_CODE": "0",
+                "FID_BLNG_CLS_CODE": "0",
+                "FID_TRGT_CLS_CODE": "111111111",
+                "FID_TRGT_EXLS_CLS_CODE": "000000",
+                "FID_INPUT_PRICE_1": "",
+                "FID_INPUT_PRICE_2": "",
+                "FID_VOL_CNT": "",
+                "FID_INPUT_DATE_1": "",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        result: list[dict[str, Any]] = []
+        for item in data.get("output", [])[:count]:
+            sym = item.get("mksc_shrn_iscd", "")
+            if not sym:
+                continue
+            result.append({
+                "symbol": sym,
+                "name": item.get("hts_kor_isnm", ""),
+                "current_price": int(item.get("stck_prpr", 0)),
+                "change_rate": float(item.get("prdy_ctrt", 0.0)),
+                "volume": int(item.get("acml_vol", 0)),
+                "turnover": int(item.get("acml_tr_pbmn", 0)),
+            })
+        return result
+
     def reset_token(self) -> None:
         """모드 전환 시 캐시된 토큰 무효화 (다음 요청 시 재발급)"""
         self._access_token = None

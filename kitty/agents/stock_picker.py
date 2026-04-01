@@ -1,4 +1,4 @@
-"""종목발굴 에이전트 - 섹터 분석 기반 신규 종목 선정"""
+"""종목발굴 에이전트 - 섹터 분석 + 실시간 시세 기반 신규 종목 선정"""
 import json
 from typing import Any
 
@@ -7,30 +7,35 @@ from .base import BaseAgent
 SYSTEM_PROMPT = """당신은 퀀트 투자 전략가입니다.
 
 역할:
-- 시장분석가의 섹터 거시 분석을 받아, 각 섹터 후보 종목의 실제 시세를 검토합니다
-- 후보 종목 중 현재 매수 가치가 있는 종목을 최종 선정합니다
-- 보유 종목에 대해 손절/익절 조건을 확인하고 매도 여부를 결정합니다
+- 시장분석가의 섹터 분석을 받아, 후보 종목의 실제 시세와 거래량을 검토합니다
+- 후보 종목 중 매수 가치가 있는 종목을 최종 선정합니다
 - 리스크 대비 수익을 최적화하는 포지션 크기를 결정합니다
 
 원칙:
-- 한 종목에 전체 자산의 20% 이상 투자하지 않습니다
+- 투자성향 지침의 종목집중·진입기준·현금 기준을 따릅니다
 - 시장 리스크가 HIGH이면 신규 매수를 하지 않습니다
-- 손절 기준: 매수 평균가 대비 -5%
-- 익절 기준: 매수 평균가 대비 +15%
-- 유망 섹터에서도 시세가 과열된 종목(당일 +5% 이상)은 매수를 보류합니다
+- 거래량이 부족한 종목(거래량 10만주 미만 또는 거래대금 10억 미만)은 매수를 보류합니다
+- 투자성향 지침의 진입기준을 초과하는 과열 종목은 매수를 보류합니다
+- 손절가와 목표가를 투자성향 지침의 손절/익절 기준에 맞춰 설정합니다
+※ 투자성향 지침이 없으면 진입기준 +5%, 손절 -5%, 익절 +10% 기본값 사용
+
+종목 선별 우선순위:
+1. 섹터 전망 bullish + 거래량 풍부 + 등락률 양호
+2. 거래량 상위 종목 중 유망 섹터에 속한 종목
+3. 유동성이 낮은 종목은 아무리 유망해도 제외
 
 출력 형식: JSON
 {
   "decisions": [
     {
-      "action": "BUY|SELL|HOLD",
+      "action": "BUY|HOLD",
       "symbol": "종목코드",
       "name": "종목명",
       "quantity": 수량,
       "price": 가격(0=시장가),
       "stop_loss": 손절가,
       "take_profit": 목표가,
-      "reason": "결정 이유 (섹터 전망 + 종목 선정 근거)"
+      "reason": "결정 이유 (거래량·등락률·섹터 근거)"
     }
   ],
   "strategy_summary": "전략 요약"
@@ -46,11 +51,13 @@ class StockPickerAgent(BaseAgent):
         """
         context:
         {
-            "analysis": SectorAnalystAgent 결과 (섹터 분석),
-            "quotes": 후보 종목 + 보유 종목 현재가 목록,
+            "analysis": SectorAnalystAgent 결과,
+            "quotes": 후보 종목 + 보유 종목 현재가,
             "portfolio": 현재 보유 종목,
             "available_cash": 사용 가능 현금,
-            "max_buy_amount": 최대 매수금액
+            "max_buy_amount": 최대 매수금액,
+            "tendency_directive": 투자성향 지침,
+            "volume_leaders": 거래량 상위 종목 (optional),
         }
         """
         analysis = context.get("analysis", {})
@@ -58,6 +65,7 @@ class StockPickerAgent(BaseAgent):
         max_buy = context.get("max_buy_amount", 1_000_000)
         quotes = context.get("quotes", [])
         tendency_directive = context.get("tendency_directive", "")
+        volume_leaders = context.get("volume_leaders", [])
 
         quotes_text = "\n".join(
             f"- {q['symbol']} {q['name']}: {q['current_price']:,}원 "
@@ -65,23 +73,36 @@ class StockPickerAgent(BaseAgent):
             for q in quotes
         )
 
+        # 거래량 상위 종목 (유동성 참고용)
+        volume_text = ""
+        if volume_leaders:
+            volume_text = "\n[거래량 상위 종목 — 유동성 참고]\n" + "\n".join(
+                f"  {v.get('name', '')}({v['symbol']}): "
+                f"{v.get('current_price', 0):,}원 ({v.get('change_rate', 0):+.2f}%) "
+                f"거래량:{v.get('volume', 0):,}"
+                for v in volume_leaders[:10]
+            )
+
         tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
-        prompt = f"""섹터 거시 분석과 후보 종목 시세를 검토하여 매매 전략을 수립해주세요.
+        prompt = f"""섹터 분석과 실시간 시세·거래량을 검토하여 신규 매수 종목을 선정해주세요.
 {tendency_section}
-[섹터 거시 분석]
+[섹터 분석]
 {json.dumps(analysis, ensure_ascii=False, indent=2)}
 
-[후보 종목 및 보유 종목 현재가]
+[후보 종목 현재가]
 {quotes_text}
+{volume_text}
 
-[현재 보유 종목 상세]
+[현재 보유 종목]
 {json.dumps(context.get('portfolio', []), ensure_ascii=False, indent=2)}
 
 [가용 현금]: {available_cash:,}원
 [1회 최대 매수금액]: {max_buy:,}원
 
-유망 섹터 후보 중 실제 매수할 종목을 선정하고, 보유 종목의 손절/익절 여부를 판단하여 JSON 형식으로 알려주세요."""
+투자성향 지침의 진입기준·손절·익절·종목집중 기준에 맞춰 종목을 선정하세요.
+거래량이 부족한 종목은 반드시 제외하세요.
+JSON 형식으로 응답해주세요."""
 
         response = await self.think(prompt)
         self.reset_conversation()
