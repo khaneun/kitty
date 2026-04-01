@@ -61,9 +61,10 @@ docker build -t kitty-monitor ./monitor
 
 mkdir -p /home/ec2-user/kitty/monitor-data
 
-# 텔레그램 자격증명 추출 (.env 삭제 전)
+# 모니터 자격증명 추출 (.env 삭제 전)
 _TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 _TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' /home/ec2-user/kitty/.env | cut -d= -f2-)
+_MON_PW=$(grep '^MONITOR_PASSWORD=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 
 docker run -d \
   --name kitty-monitor \
@@ -74,6 +75,7 @@ docker run -d \
   -v /home/ec2-user/kitty/monitor-data:/data \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \
+  -e MONITOR_PASSWORD="$_MON_PW" \
   -p 8080:8080 \
   kitty-monitor
 
