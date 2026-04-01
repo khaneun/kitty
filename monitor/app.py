@@ -26,6 +26,8 @@ LOG_DIR       = Path(os.getenv("LOG_DIR",       "/logs"))
 FEEDBACK_DIR  = Path(os.getenv("FEEDBACK_DIR",  "/feedback"))
 TOKEN_DIR     = Path(os.getenv("TOKEN_DIR",      "/token_usage"))
 PORTFOLIO_SNAPSHOT = LOG_DIR / "portfolio_snapshot.json"
+CMD_DIR  = Path(os.getenv("CMD_DIR", "/commands"))
+MODE_REQ = CMD_DIR / "mode_request.json"
 DB_PATH       = Path(os.getenv("DB_PATH",        "/data/monitor.db"))
 PASSWORD      = os.getenv("MONITOR_PASSWORD", "kitty")
 POLL_SEC      = int(os.getenv("POLL_SEC",      "15"))
@@ -361,11 +363,31 @@ def api_portfolio(req: Request):
     """logs/portfolio_snapshot.json 에서 최신 포트폴리오 반환"""
     _auth(req)
     if not PORTFOLIO_SNAPSHOT.exists():
-        return {"ts": None, "holdings": [], "available_cash": 0, "total_eval": 0, "total_pnl": 0}
+        return {"ts": None, "trading_mode": None, "holdings": [],
+                "available_cash": 0, "total_eval": 0, "total_pnl": 0}
     try:
         return json.loads(PORTFOLIO_SNAPSHOT.read_text(encoding="utf-8"))
     except Exception:
-        return {"ts": None, "holdings": [], "available_cash": 0, "total_eval": 0, "total_pnl": 0}
+        return {"ts": None, "trading_mode": None, "holdings": [],
+                "available_cash": 0, "total_eval": 0, "total_pnl": 0}
+
+
+@app.post("/api/set-mode")
+async def api_set_mode(req: Request):
+    """kitty 모드 전환 요청 — commands/mode_request.json 에 기록"""
+    _auth(req)
+    body = await req.json()
+    mode = body.get("mode", "")
+    if mode not in ("paper", "live"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "mode must be 'paper' or 'live'")
+    try:
+        CMD_DIR.mkdir(parents=True, exist_ok=True)
+        MODE_REQ.write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        return {"ok": True, "mode": mode}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
 
 
 @app.get("/api/agent-scores")
@@ -480,11 +502,17 @@ _HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px}
-header{background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
-.logo{font-size:15px;font-weight:700;color:#f0f6fc}
-.upd{font-size:11px;color:#8b949e;display:flex;align-items:center;gap:5px}
+header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;gap:10px}
+.logo{font-size:15px;font-weight:700;color:#f0f6fc;flex-shrink:0}
+.gnb{display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end}
+.upd{font-size:11px;color:#8b949e;display:flex;align-items:center;gap:5px;flex-shrink:0}
 .dot{width:7px;height:7px;border-radius:50%;background:#3fb950;animation:blink 2s infinite;flex-shrink:0}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+/* GNB 셀렉터 */
+.gnb-select{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;outline:none}
+.gnb-select:focus{border-color:#58a6ff}
+.mode-paper{border-color:#3fb950!important;color:#3fb950!important}
+.mode-live{border-color:#f85149!important;color:#f85149!important}
 /* 탭 */
 .tabs{display:flex;border-bottom:1px solid #30363d;background:#161b22;position:sticky;top:41px;z-index:99;overflow-x:auto}
 .tab{padding:10px 14px;font-size:12px;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0}
@@ -590,6 +618,12 @@ table.log tr:hover td{background:#161b22}
 <body>
 <header>
   <div class="logo">🐱 Kitty Monitor</div>
+  <div class="gnb">
+    <select id="gnb-mode" class="gnb-select" onchange="onModeChange(this.value)" title="매매 모드">
+      <option value="paper">📄 paper</option>
+      <option value="live">🔴 live</option>
+    </select>
+  </div>
   <div class="upd"><span class="dot"></span><span id="upd-txt">연결 중...</span></div>
 </header>
 
@@ -660,6 +694,7 @@ table.log tr:hover td{background:#161b22}
   <!-- 포트폴리오 현황 -->
   <div class="section">
     <div class="sec-title">현재 포트폴리오</div>
+
     <div class="cards" id="pf-summary-cards" style="margin-bottom:10px">
       <div class="card"><div class="num blue"  id="pf-total-eval">-</div><div class="lbl">총평가금액</div></div>
       <div class="card"><div class="num"       id="pf-total-pnl">-</div><div class="lbl">평가손익</div></div>
@@ -837,12 +872,53 @@ function clearFilter(){
   loadErrors();
 }
 
+// ── GNB 모드 셀렉터 ─────────────────────────────────────
+async function onModeChange(newMode) {
+  const sel = document.getElementById('gnb-mode');
+  if(newMode === 'live') {
+    if(!confirm('⚠️ 실전 매매 모드로 전환합니다.\n실제 자금으로 거래됩니다. 계속하시겠습니까?')) {
+      // 취소 시 원래 값 복원
+      sel.value = sel.dataset.current || 'paper';
+      return;
+    }
+  }
+  try {
+    const r = await fetch('/api/set-mode', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mode: newMode})
+    });
+    if(r.ok) {
+      sel.dataset.current = newMode;
+      updateModeStyle(sel, newMode);
+    } else {
+      alert('모드 전환 요청 실패');
+      sel.value = sel.dataset.current || 'paper';
+    }
+  } catch(e) {
+    alert('오류: '+e);
+    sel.value = sel.dataset.current || 'paper';
+  }
+}
+
+function updateModeStyle(sel, mode) {
+  sel.className = 'gnb-select ' + (mode==='live'?'mode-live':'mode-paper');
+}
+
 // ── 포트폴리오 탭 ────────────────────────────────────────
 async function loadPortfolio() {
   try {
     const d = await fetch('/api/portfolio').then(r=>r.json());
     const fmtW = n => n.toLocaleString('ko-KR')+'원';
     const pnlColor = n => n>=0?'#3fb950':'#f85149';
+
+    // GNB 셀렉터 동기화
+    if(d.trading_mode) {
+      const sel = document.getElementById('gnb-mode');
+      sel.value = d.trading_mode;
+      sel.dataset.current = d.trading_mode;
+      updateModeStyle(sel, d.trading_mode);
+    }
 
     document.getElementById('pf-total-eval').textContent = d.total_eval ? fmtW(d.total_eval) : '-';
     const pnlEl = document.getElementById('pf-total-pnl');

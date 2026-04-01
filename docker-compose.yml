@@ -9,6 +9,7 @@ services:
       - ./logs:/app/logs
       - ./feedback:/app/feedback
       - ./token_usage:/app/token_usage
+      - ./commands:/app/commands
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/host/kitty
     logging:
@@ -27,6 +28,7 @@ services:
       - ./logs:/logs:ro               # kitty 로그 읽기 전용
       - ./feedback:/feedback:ro       # 에이전트 피드백 읽기 전용
       - ./token_usage:/token_usage:ro # 토큰 사용량 읽기 전용
+      - ./commands:/commands          # 모드 전환 등 kitty 명령 채널
       - ./monitor-data:/data          # SQLite DB 영속 저장
     environment:
       - MONITOR_PASSWORD=${MONITOR_PASSWORD:-kitty}

@@ -63,8 +63,10 @@ async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> N
 
         # ── 스냅샷 저장 (monitor가 읽음) ───────────────────────
         try:
+            from kitty.config import settings as _cfg
             snapshot = {
                 "ts":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "trading_mode":  _cfg.trading_mode.value,
                 "available_cash": available_cash,
                 "total_eval":    total_eval,
                 "total_pnl":     total_pnl,

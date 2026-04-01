@@ -41,6 +41,7 @@ mkdir -p /home/ec2-user/kitty/feedback
 mkdir -p /home/ec2-user/kitty/logs
 
 mkdir -p /home/ec2-user/kitty/token_usage
+mkdir -p /home/ec2-user/kitty/commands
 
 docker run -d \
   --name kitty-trader \
@@ -49,6 +50,7 @@ docker run -d \
   -v /home/ec2-user/kitty/logs:/app/logs \
   -v /home/ec2-user/kitty/feedback:/app/feedback \
   -v /home/ec2-user/kitty/token_usage:/app/token_usage \
+  -v /home/ec2-user/kitty/commands:/app/commands \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /home/ec2-user/kitty:/host/kitty \
   kitty-trader
@@ -72,6 +74,7 @@ docker run -d \
   -v /home/ec2-user/kitty/logs:/logs:ro \
   -v /home/ec2-user/kitty/feedback:/feedback:ro \
   -v /home/ec2-user/kitty/token_usage:/token_usage:ro \
+  -v /home/ec2-user/kitty/commands:/commands \
   -v /home/ec2-user/kitty/monitor-data:/data \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \

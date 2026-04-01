@@ -1,7 +1,11 @@
 """Kitty - 한국투자증권 멀티 에이전트 자동 매매 시스템"""
 import asyncio
+import json
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+_MODE_REQ = Path("commands/mode_request.json")
 
 import holidays
 
@@ -247,6 +251,22 @@ async def main() -> None:
     try:
         while True:
             now = datetime.now(_KST)
+
+            # 모니터 대시보드 모드 전환 요청 확인
+            if _MODE_REQ.exists():
+                try:
+                    req = json.loads(_MODE_REQ.read_text(encoding="utf-8"))
+                    new_mode = req.get("mode", "")
+                    if new_mode in ("paper", "live"):
+                        from kitty.config import TradingMode
+                        settings.trading_mode = TradingMode(new_mode)
+                        broker.reset_token()
+                        logger.info(f"[모니터] 모드 전환: {new_mode}")
+                        await reporter.send(f"🔄 모드 전환: `{new_mode}` (모니터 대시보드)")
+                except Exception as e:
+                    logger.warning(f"모드 전환 요청 처리 실패: {e}")
+                finally:
+                    _MODE_REQ.unlink(missing_ok=True)
 
             # 날짜가 바뀌면 일일 리포트 텔레그램 발송 후 새 리포트 시작
             today = now.strftime("%Y-%m-%d")
