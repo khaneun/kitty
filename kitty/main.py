@@ -427,7 +427,11 @@ async def main() -> None:
             else:
                 await asyncio.sleep(10 * attempt)
 
-    await reporter.send(f"🐱 Kitty 시작! 모드: `{settings.trading_mode.value}`")
+    dashboard_url = f"http://{await reporter.fetch_dashboard_url()}:{settings.monitor_port}"
+    await reporter.send(
+        f"🐱 Kitty 시작! 모드: `{settings.trading_mode.value}`\n"
+        f"📊 대시보드: [{dashboard_url}]({dashboard_url})"
+    )
 
     try:
         await print_portfolio_and_balance(broker, label="시작")

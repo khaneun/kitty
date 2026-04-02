@@ -448,7 +448,7 @@ class TelegramReporter:
     async def _cmd_dashboard(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         host = settings.monitor_host
         if not host:
-            host = await self._fetch_ec2_public_ip()
+            host = await self.fetch_dashboard_url()
         url = f"http://{host}:{settings.monitor_port}"
         await update.message.reply_text(  # type: ignore[union-attr]
             f"📊 *Kitty Monitor*\n[{url}]({url})",
@@ -456,7 +456,7 @@ class TelegramReporter:
         )
 
     @staticmethod
-    async def _fetch_ec2_public_ip() -> str:
+    async def fetch_dashboard_url() -> str:
         """EC2 IMDSv2로 퍼블릭 IP 조회 (토큰 기반 2단계 요청)"""
         import aiohttp
         _imds = "http://169.254.169.254"
