@@ -2,6 +2,43 @@
 
 ---
 
+## v1.8.0 — 2026-04-02
+
+### 로그 가독성 개선 — 종목명(종목코드) 형식
+
+**로그에 종목명 추가** (`kitty/broker/kis.py`, `kitty/agents/buy_executor.py`, `kitty/agents/sell_executor.py`, `kitty/report.py`, `kitty/telegram/bot.py`)
+
+기존 로그에 종목코드만 출력되던 모든 위치를 `종목명(종목코드)` 형식으로 통일.
+종목명을 알 수 없는 경우(조회 실패, 오류 케이스)는 코드만 그대로 출력.
+
+- `broker/kis.py`: `buy()`, `sell()`에 `name: str = ""` 파라미터 추가. 로그 `종목명(코드)` 형식으로 변경
+- `buy_executor.py`: `_execute_smart_buy(name="")` 파라미터 추가. `chunk_label`, 스킵/완료/실패 로그 전체 수정. `consolidated` 결과 딕셔너리에 `name` 필드 추가
+- `sell_executor.py`: 동일 패턴. 긴급 손절, 하한가 강행, 스마트 매도 완료/실패 로그 수정
+- `report.py`: 매수/매도 체결 로그에서 `r.get('name')` 활용
+- `telegram/bot.py`: 수동 매수/매도 시 `get_quote()`로 종목명 조회 후 로그에 반영
+
+### 즉시 사이클 실행 후 타이머 리셋
+
+**중복 사이클 방지** (`kitty/main.py`)
+
+텔레그램 `/cycle` 명령으로 즉시 사이클을 실행한 경우, 이후 메인 루프의 5분 타이머가 즉시 실행 시점부터 다시 카운트되도록 수정.
+
+- `_last_cycle_time: float` 변수로 마지막 사이클 실행 시각 추적
+- `_cycle_now()`: 실행 전 `_last_cycle_time` 갱신
+- 메인 루프: 고정 `asyncio.sleep(300)` → `elapsed` 계산 후 잔여 시간만 대기
+
+### `/dashboard` EC2 퍼블릭 IP 자동 조회 수정
+
+**IMDSv2 지원** (`kitty/telegram/bot.py`)
+
+기존 IMDSv1 방식(`urllib.request.urlopen` 단순 GET)은 최신 EC2 인스턴스에서 IMDSv2 필수 설정 시 항상 실패해 `EC2-IP`로 fallback되던 문제 수정.
+
+- `_fetch_ec2_public_ip()` 정적 메서드 추출
+- IMDSv2 2단계 프로토콜: PUT으로 토큰 발급 → GET으로 퍼블릭 IP 조회 (`aiohttp` 비동기)
+- 기존 블로킹 `urllib` 제거, 응답에 클릭 가능한 Markdown 링크(`[URL](URL)`) 형식으로 변경
+
+---
+
 ## v1.7.0 — 2026-04-01
 
 ### 피드백 루프 강화

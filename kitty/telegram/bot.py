@@ -304,12 +304,18 @@ class TelegramReporter:
         try:
             qty = int(qty_str)
             await update.message.reply_text(f"🛒 `{symbol}` {qty}주 시장가 매수 중...")  # type: ignore[union-attr]
-            order = await self._broker.buy(symbol, qty, 0)
+            try:
+                _q = await self._broker.get_quote(symbol)
+                _name = _q.name
+            except Exception:
+                _name = ""
+            _lbl = f"{_name}({symbol})" if _name else symbol
+            order = await self._broker.buy(symbol, qty, 0, _name)
             await update.message.reply_text(  # type: ignore[union-attr]
                 f"🟢 *수동 매수 완료*\n종목: `{symbol}`\n수량: {qty:,}주\n주문번호: `{order.order_id}`",
                 parse_mode="Markdown",
             )
-            logger.info(f"[텔레그램] 수동 매수: {symbol} {qty}주")
+            logger.info(f"[텔레그램] 수동 매수: {_lbl} {qty}주")
         except Exception as e:
             await update.message.reply_text(f"❌ 매수 실패: {e}")  # type: ignore[union-attr]
 
@@ -325,12 +331,18 @@ class TelegramReporter:
         try:
             qty = int(qty_str)
             await update.message.reply_text(f"📤 `{symbol}` {qty}주 시장가 매도 중...")  # type: ignore[union-attr]
-            order = await self._broker.sell(symbol, qty, 0)
+            try:
+                _q = await self._broker.get_quote(symbol)
+                _name = _q.name
+            except Exception:
+                _name = ""
+            _lbl = f"{_name}({symbol})" if _name else symbol
+            order = await self._broker.sell(symbol, qty, 0, _name)
             await update.message.reply_text(  # type: ignore[union-attr]
                 f"🔴 *수동 매도 완료*\n종목: `{symbol}`\n수량: {qty:,}주\n주문번호: `{order.order_id}`",
                 parse_mode="Markdown",
             )
-            logger.info(f"[텔레그램] 수동 매도: {symbol} {qty}주")
+            logger.info(f"[텔레그램] 수동 매도: {_lbl} {qty}주")
         except Exception as e:
             await update.message.reply_text(f"❌ 매도 실패: {e}")  # type: ignore[union-attr]
 
@@ -436,18 +448,36 @@ class TelegramReporter:
     async def _cmd_dashboard(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         host = settings.monitor_host
         if not host:
-            try:
-                import urllib.request
-                host = urllib.request.urlopen(
-                    "http://169.254.169.254/latest/meta-data/public-ipv4", timeout=2
-                ).read().decode().strip()
-            except Exception:
-                host = "EC2-IP"
+            host = await self._fetch_ec2_public_ip()
         url = f"http://{host}:{settings.monitor_port}"
         await update.message.reply_text(  # type: ignore[union-attr]
-            f"📊 *Kitty Monitor*\n{url}",
+            f"📊 *Kitty Monitor*\n[{url}]({url})",
             parse_mode="Markdown",
         )
+
+    @staticmethod
+    async def _fetch_ec2_public_ip() -> str:
+        """EC2 IMDSv2로 퍼블릭 IP 조회 (토큰 기반 2단계 요청)"""
+        import aiohttp
+        _imds = "http://169.254.169.254"
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1단계: IMDSv2 토큰 발급
+                async with session.put(
+                    f"{_imds}/latest/api/token",
+                    headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"},
+                    timeout=aiohttp.ClientTimeout(total=2),
+                ) as resp:
+                    token = await resp.text()
+                # 2단계: 토큰으로 퍼블릭 IP 조회
+                async with session.get(
+                    f"{_imds}/latest/meta-data/public-ipv4",
+                    headers={"X-aws-ec2-metadata-token": token},
+                    timeout=aiohttp.ClientTimeout(total=2),
+                ) as resp:
+                    return (await resp.text()).strip()
+        except Exception:
+            return "EC2-IP"
 
     # ---- AWS 제어 명령어 ----
 

@@ -35,6 +35,7 @@ class SellExecutorAgent(BaseAgent):
         price: int,
         order_type: str,
         priority: str,
+        name: str = "",
     ) -> list[dict[str, Any]]:
         """
         HIGH priority (stop-loss): always immediate market order, no split
@@ -44,11 +45,13 @@ class SellExecutorAgent(BaseAgent):
         """
         chunk_results: list[dict[str, Any]] = []
 
+        _label = f"{name}({symbol})" if name else symbol
+
         # HIGH priority: immediate market order, no split
         if priority == "HIGH":
-            logger.info(f"[매도실행가] {symbol} 긴급 손절 — 시장가 즉시 매도 {quantity}주")
+            logger.info(f"[매도실행가] {_label} 긴급 손절 — 시장가 즉시 매도 {quantity}주")
             try:
-                order: OrderResult = await self.broker.sell(symbol, quantity, 0)
+                order: OrderResult = await self.broker.sell(symbol, quantity, 0, name)
                 chunk_results.append({
                     "symbol": symbol,
                     "order_id": order.order_id,
@@ -58,7 +61,7 @@ class SellExecutorAgent(BaseAgent):
                     "chunk": 1,
                 })
             except Exception as e:
-                logger.error(f"[매도실행가] {symbol} 긴급 매도 실패: {e}")
+                logger.error(f"[매도실행가] {_label} 긴급 매도 실패: {e}")
                 chunk_results.append({
                     "symbol": symbol,
                     "status": "FAILED",
@@ -87,11 +90,11 @@ class SellExecutorAgent(BaseAgent):
                 # Offer slightly above current price to improve fill odds
                 limit_price = round(quote.current_price * 1.002)
             except Exception as e:
-                logger.warning(f"[매도실행가] {symbol} 현재가 조회 실패, 시장가 사용: {e}")
+                logger.warning(f"[매도실행가] {_label} 현재가 조회 실패, 시장가 사용: {e}")
                 limit_price = 0
 
         for i, chunk_qty in enumerate(chunks):
-            chunk_label = f"{symbol} 청크{i + 1}/{len(chunks)} ({chunk_qty}주)"
+            chunk_label = f"{_label} 청크{i + 1}/{len(chunks)} ({chunk_qty}주)"
 
             # For split chunks, always use current price
             if use_split:
@@ -110,7 +113,7 @@ class SellExecutorAgent(BaseAgent):
                     if attempt == 0 and chunk_price > 0:
                         # First attempt: limit order
                         logger.info(f"[매도실행가] {chunk_label} 지정가 매도 시도 @ {chunk_price:,}원")
-                        order = await self.broker.sell(symbol, chunk_qty, chunk_price)
+                        order = await self.broker.sell(symbol, chunk_qty, chunk_price, name)
                         order_id = order.order_id
 
                         # Wait 8 seconds for fill
@@ -146,7 +149,7 @@ class SellExecutorAgent(BaseAgent):
                     else:
                         # Fallback: market order
                         logger.info(f"[매도실행가] {chunk_label} 시장가 매도 시도 (attempt {attempt + 1})")
-                        order = await self.broker.sell(symbol, chunk_qty, 0)
+                        order = await self.broker.sell(symbol, chunk_qty, 0, name)
                         logger.info(f"[매도실행가] {chunk_label} 시장가 매도 주문 완료")
                         chunk_results.append({
                             "symbol": symbol,
@@ -209,8 +212,10 @@ class SellExecutorAgent(BaseAgent):
 
             # Lower limit check
             quote = quote_map.get(symbol)
+            name = quote["name"] if quote else ""
+            _label = f"{name}({symbol})" if name else symbol
             if quote and quote["change_rate"] <= -29.5:
-                logger.warning(f"[매도실행가] {symbol} 하한가 근접 — 시장가 즉시 매도 강행")
+                logger.warning(f"[매도실행가] {_label} 하한가 근접 — 시장가 즉시 매도 강행")
                 price = 0
                 priority = "HIGH"
 
@@ -222,12 +227,12 @@ class SellExecutorAgent(BaseAgent):
 
             try:
                 chunks = await self._execute_smart_sell(
-                    symbol, quantity, price, effective_order_type, priority
+                    symbol, quantity, price, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
-                logger.info(f"[매도실행가] {symbol} 스마트 매도 완료: {len(chunks)}개 청크")
+                logger.info(f"[매도실행가] {_label} 스마트 매도 완료: {len(chunks)}개 청크")
             except Exception as e:
-                logger.error(f"[매도실행가] {symbol} 스마트 매도 실패: {e}")
+                logger.error(f"[매도실행가] {_label} 스마트 매도 실패: {e}")
                 all_chunk_results.append({
                     "symbol": symbol,
                     "status": "FAILED",
@@ -242,6 +247,7 @@ class SellExecutorAgent(BaseAgent):
             if sym not in consolidated:
                 consolidated[sym] = {
                     "symbol": sym,
+                    "name": quote_map.get(sym, {}).get("name", ""),
                     "status": r.get("status", "UNKNOWN"),
                     "quantity": 0,
                     "price": r.get("price", 0),

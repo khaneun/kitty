@@ -132,10 +132,14 @@ class DailyReport:
             self._current.sell_results = sell_results
             for r in buy_results:
                 status = r.get("status", "")
-                logger.info(f"[리포트] 매수체결 - {r.get('symbol')} {status} | {r.get('reason', r.get('order_id', ''))}")
+                _n, _s = r.get("name", ""), r.get("symbol", "")
+                _lbl = f"{_n}({_s})" if _n else _s
+                logger.info(f"[리포트] 매수체결 - {_lbl} {status} | {r.get('reason', r.get('order_id', ''))}")
             for r in sell_results:
                 status = r.get("status", "")
-                logger.info(f"[리포트] 매도체결 - {r.get('symbol')} {status} | {r.get('reason', r.get('order_id', ''))}")
+                _n, _s = r.get("name", ""), r.get("symbol", "")
+                _lbl = f"{_n}({_s})" if _n else _s
+                logger.info(f"[리포트] 매도체결 - {_lbl} {status} | {r.get('reason', r.get('order_id', ''))}")
 
     def end_cycle(self) -> None:
         """사이클 종료 및 파일 저장"""

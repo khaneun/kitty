@@ -1,6 +1,7 @@
 """Kitty - 한국투자증권 멀티 에이전트 자동 매매 시스템"""
 import asyncio
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -379,7 +380,11 @@ async def main() -> None:
 
     daily_report = DailyReport()
 
+    _last_cycle_time: float = 0.0
+
     async def _cycle_now() -> None:
+        nonlocal _last_cycle_time
+        _last_cycle_time = time.monotonic()
         await run_trading_cycle(
             broker,
             sector_analyst,
@@ -485,6 +490,7 @@ async def main() -> None:
                 logger.info("장 외 시간 - 대기 중")
             elif not reporter.is_paused:
                 try:
+                    _last_cycle_time = time.monotonic()
                     await run_trading_cycle(
                         broker,
                         sector_analyst,
@@ -503,8 +509,10 @@ async def main() -> None:
             else:
                 logger.info("매매 일시정지 중...")
 
-            # 5분마다 실행
-            await asyncio.sleep(300)
+            # 마지막 사이클 실행 시각 기준 300초 대기 (즉시 실행 요청 시 타이머 리셋)
+            elapsed = time.monotonic() - _last_cycle_time
+            wait = max(0.0, 300.0 - elapsed)
+            await asyncio.sleep(wait)
 
     except KeyboardInterrupt:
         logger.info("Kitty 종료 중...")

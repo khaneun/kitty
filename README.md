@@ -414,7 +414,7 @@ MONITOR_PASSWORD
 http://<EC2-IP>:8080        (HTTP Basic Auth)
 ```
 
-Telegram `/dashboard` 명령으로 URL을 바로 받을 수 있습니다.
+Telegram `/dashboard` 명령으로 URL을 바로 받을 수 있습니다. EC2 재시작으로 IP가 바뀌어도 IMDSv2로 항상 현재 퍼블릭 IP를 자동 조회합니다.
 
 ### 화면 구성
 

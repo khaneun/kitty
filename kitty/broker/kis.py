@@ -159,7 +159,7 @@ class KISBroker:
         logger.info(f"주문가능현금: {cash:,}원")
         return cash
 
-    async def buy(self, symbol: str, quantity: int, price: int = 0) -> OrderResult:
+    async def buy(self, symbol: str, quantity: int, price: int = 0, name: str = "") -> OrderResult:
         """매수 주문
         실전 TR: TTTC0802U
         모의 TR: VTTC0802U
@@ -186,7 +186,8 @@ class KISBroker:
         data = resp.json()
         if data.get("rt_cd") != "0":
             raise RuntimeError(data.get("msg1", str(data)))
-        logger.info(f"매수 주문: {symbol} {quantity}주 @ {price}원")
+        _label = f"{name}({symbol})" if name else symbol
+        logger.info(f"매수 주문: {_label} {quantity}주 @ {price}원")
         return OrderResult(
             order_id=data["output"]["ODNO"],
             symbol=symbol,
@@ -197,7 +198,7 @@ class KISBroker:
             timestamp=datetime.now(),
         )
 
-    async def sell(self, symbol: str, quantity: int, price: int = 0) -> OrderResult:
+    async def sell(self, symbol: str, quantity: int, price: int = 0, name: str = "") -> OrderResult:
         """매도 주문
         실전 TR: TTTC0801U
         모의 TR: VTTC0801U
@@ -224,7 +225,8 @@ class KISBroker:
         data = resp.json()
         if data.get("rt_cd") != "0":
             raise RuntimeError(data.get("msg1", str(data)))
-        logger.info(f"매도 주문: {symbol} {quantity}주 @ {price}원")
+        _label = f"{name}({symbol})" if name else symbol
+        logger.info(f"매도 주문: {_label} {quantity}주 @ {price}원")
         return OrderResult(
             order_id=data["output"]["ODNO"],
             symbol=symbol,

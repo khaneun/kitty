@@ -35,6 +35,7 @@ class BuyExecutorAgent(BaseAgent):
         price: int,
         order_type: str,
         priority: str,
+        name: str = "",
     ) -> list[dict[str, Any]]:
         """
         SPLIT: divide quantity into chunks of max 3, try limit order then market fallback
@@ -56,7 +57,8 @@ class BuyExecutorAgent(BaseAgent):
                 quote = await self.broker.get_quote(symbol)
                 order_price = quote.current_price
             except Exception as e:
-                logger.warning(f"[매수실행가] {symbol} 현재가 조회 실패, 시장가 사용: {e}")
+                _slabel = f"{name}({symbol})" if name else symbol
+                logger.warning(f"[매수실행가] {_slabel} 현재가 조회 실패, 시장가 사용: {e}")
                 order_price = 0
 
         use_split = order_type == "SPLIT" or quantity > 5
@@ -70,8 +72,9 @@ class BuyExecutorAgent(BaseAgent):
         else:
             chunks = [quantity]
 
+        _label = f"{name}({symbol})" if name else symbol
         for i, chunk_qty in enumerate(chunks):
-            chunk_label = f"{symbol} 청크{i + 1}/{len(chunks)} ({chunk_qty}주)"
+            chunk_label = f"{_label} 청크{i + 1}/{len(chunks)} ({chunk_qty}주)"
             success = False
 
             for attempt in range(3):
@@ -79,7 +82,7 @@ class BuyExecutorAgent(BaseAgent):
                     if attempt == 0 and order_price > 0:
                         # First attempt: limit order at current price
                         logger.info(f"[매수실행가] {chunk_label} 지정가 매수 시도 @ {order_price:,}원")
-                        order: OrderResult = await self.broker.buy(symbol, chunk_qty, order_price)
+                        order: OrderResult = await self.broker.buy(symbol, chunk_qty, order_price, name)
                         order_id = order.order_id
 
                         # Wait 8 seconds for fill
@@ -120,7 +123,7 @@ class BuyExecutorAgent(BaseAgent):
                     else:
                         # Fallback: market order
                         logger.info(f"[매수실행가] {chunk_label} 시장가 매수 시도 (attempt {attempt + 1})")
-                        order = await self.broker.buy(symbol, chunk_qty, 0)
+                        order = await self.broker.buy(symbol, chunk_qty, 0, name)
                         logger.info(f"[매수실행가] {chunk_label} 시장가 매수 주문 완료")
                         chunk_results.append({
                             "symbol": symbol,
@@ -182,8 +185,10 @@ class BuyExecutorAgent(BaseAgent):
 
             # Pre-flight check: skip near upper limit
             quote = quote_map.get(symbol)
+            name = quote["name"] if quote else ""
+            _label = f"{name}({symbol})" if name else symbol
             if quote and quote["change_rate"] >= 29.5:
-                logger.warning(f"[매수실행가] {symbol} 상한가 근접 - 매수 스킵")
+                logger.warning(f"[매수실행가] {_label} 상한가 근접 - 매수 스킵")
                 all_chunk_results.append({
                     "symbol": symbol,
                     "status": "SKIPPED",
@@ -197,12 +202,12 @@ class BuyExecutorAgent(BaseAgent):
 
             try:
                 chunks = await self._execute_smart_buy(
-                    symbol, quantity, price, effective_order_type, priority
+                    symbol, quantity, price, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
-                logger.info(f"[매수실행가] {symbol} 스마트 매수 완료: {len(chunks)}개 청크")
+                logger.info(f"[매수실행가] {_label} 스마트 매수 완료: {len(chunks)}개 청크")
             except Exception as e:
-                logger.error(f"[매수실행가] {symbol} 스마트 매수 실패: {e}")
+                logger.error(f"[매수실행가] {_label} 스마트 매수 실패: {e}")
                 all_chunk_results.append({
                     "symbol": symbol,
                     "status": "FAILED",
@@ -217,6 +222,7 @@ class BuyExecutorAgent(BaseAgent):
             if sym not in consolidated:
                 consolidated[sym] = {
                     "symbol": sym,
+                    "name": quote_map.get(sym, {}).get("name", ""),
                     "status": r.get("status", "UNKNOWN"),
                     "quantity": 0,
                     "price": r.get("price", 0),
