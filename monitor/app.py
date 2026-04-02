@@ -13,6 +13,13 @@ import sqlite3
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+_KST = ZoneInfo("Asia/Seoul")
+
+
+def _now() -> datetime:
+    return datetime.now(_KST)
 from pathlib import Path
 from secrets import compare_digest
 from typing import Optional
@@ -101,7 +108,7 @@ def init_db() -> None:
 
 
 def cleanup_old(conn: sqlite3.Connection) -> None:
-    cutoff = (datetime.utcnow() - timedelta(days=RETAIN_DAYS)).strftime("%Y-%m-%d")
+    cutoff = (_now() - timedelta(days=RETAIN_DAYS)).strftime("%Y-%m-%d")
     conn.execute("DELETE FROM errors WHERE date < ?", (cutoff,))
     conn.commit()
 
@@ -224,7 +231,7 @@ async def _watcher() -> None:
         new: list[dict] = []
         for path in sorted(LOG_DIR.glob("kitty_*.log")):
             new.extend(scan_file(path, conn))
-        if datetime.now().hour == 0 and datetime.now().minute < 1:
+        if _now().hour == 0 and _now().minute < 1:
             cleanup_old(conn)
         conn.close()
         if new:
@@ -273,8 +280,8 @@ def health():
 def api_health(req: Request):
     """헬스 상태: 에러 건수, 최근 로그 시각, 최근 에러 5건"""
     _auth(req)
-    today = datetime.now().strftime("%Y-%m-%d")
-    hour_ago = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    today = _now().strftime("%Y-%m-%d")
+    hour_ago = (_now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     with _db() as c:
         err_today  = c.execute(
             "SELECT COUNT(*) FROM errors WHERE date=? AND level IN ('ERROR','CRITICAL')", (today,)
@@ -335,7 +342,7 @@ def api_errors(
 @app.get("/api/stats")
 def api_stats(req: Request):
     _auth(req)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _now().strftime("%Y-%m-%d")
     with _db() as c:
         daily = c.execute("""
             SELECT date, level, COUNT(*) cnt FROM errors
@@ -475,8 +482,8 @@ def api_agent_scores(req: Request):
 def api_token_usage(req: Request):
     """token_usage/YYYY-MM-DD.json 파일에서 최근 14일치 토큰 사용량 반환"""
     _auth(req)
-    today = datetime.now().strftime("%Y-%m-%d")
-    dates = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+    today = _now().strftime("%Y-%m-%d")
+    dates = [(_now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
 
     daily: dict[str, dict] = {}       # date → {in, out, cost}
     by_agent: dict[str, dict] = {}    # agent → {in, out, cost}
