@@ -186,10 +186,11 @@ class KISBroker:
         실전 TR: TTTC0802U
         모의 TR: VTTC0802U
         price=0 이면 시장가(ORD_DVSN=01), 그 외 지정가(ORD_DVSN=00)
+        KIS API rate limit 대응: 500 응답 시 최대 3회 재시도 (1s, 2s 간격)
         """
         tr_id = "TTTC0802U" if settings.is_live else "VTTC0802U"
         ord_dvsn = "01" if price == 0 else "00"
-        headers = await self._headers(tr_id)
+        _label = f"{name}({symbol})" if name else symbol
 
         body = {
             "CANO": settings.active_kis_account_number[:8],
@@ -199,36 +200,57 @@ class KISBroker:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": str(price),
         }
-        resp = await self._client.post(
-            f"{self._base_url}/uapi/domestic-stock/v1/trading/order-cash",
-            headers=headers,
-            json=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("rt_cd") != "0":
-            raise RuntimeError(data.get("msg1", str(data)))
-        _label = f"{name}({symbol})" if name else symbol
-        logger.info(f"매수 주문: {_label} {quantity}주 @ {price}원")
-        return OrderResult(
-            order_id=data["output"]["ODNO"],
-            symbol=symbol,
-            side="BUY",
-            quantity=quantity,
-            price=price,
-            status="SUBMITTED",
-            timestamp=datetime.now(),
-        )
+
+        last_exc: Exception = RuntimeError("buy 재시도 초과")
+        for attempt in range(3):
+            if attempt > 0:
+                await asyncio.sleep(attempt)  # 1초, 2초 대기
+            try:
+                headers = await self._headers(tr_id)
+                resp = await self._client.post(
+                    f"{self._base_url}/uapi/domestic-stock/v1/trading/order-cash",
+                    headers=headers,
+                    json=body,
+                )
+                if resp.status_code == 500:
+                    last_exc = httpx.HTTPStatusError(
+                        f"500 Internal Server Error (attempt {attempt + 1})",
+                        request=resp.request,
+                        response=resp,
+                    )
+                    logger.warning(f"[KIS] 매수 주문 {_label} 500 — {attempt + 1}/3 재시도")
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("rt_cd") != "0":
+                    raise RuntimeError(data.get("msg1", str(data)))
+                logger.info(f"매수 주문: {_label} {quantity}주 @ {price}원")
+                return OrderResult(
+                    order_id=data["output"]["ODNO"],
+                    symbol=symbol,
+                    side="BUY",
+                    quantity=quantity,
+                    price=price,
+                    status="SUBMITTED",
+                    timestamp=datetime.now(),
+                )
+            except (httpx.HTTPStatusError, RuntimeError):
+                raise
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[KIS] 매수 주문 {_label} 오류 (attempt {attempt + 1}): {e}")
+        raise last_exc
 
     async def sell(self, symbol: str, quantity: int, price: int = 0, name: str = "") -> OrderResult:
         """매도 주문
         실전 TR: TTTC0801U
         모의 TR: VTTC0801U
         price=0 이면 시장가(ORD_DVSN=01), 그 외 지정가(ORD_DVSN=00)
+        KIS API rate limit 대응: 500 응답 시 최대 3회 재시도 (1s, 2s 간격)
         """
         tr_id = "TTTC0801U" if settings.is_live else "VTTC0801U"
         ord_dvsn = "01" if price == 0 else "00"
-        headers = await self._headers(tr_id)
+        _label = f"{name}({symbol})" if name else symbol
 
         body = {
             "CANO": settings.active_kis_account_number[:8],
@@ -238,26 +260,46 @@ class KISBroker:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": str(price),
         }
-        resp = await self._client.post(
-            f"{self._base_url}/uapi/domestic-stock/v1/trading/order-cash",
-            headers=headers,
-            json=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("rt_cd") != "0":
-            raise RuntimeError(data.get("msg1", str(data)))
-        _label = f"{name}({symbol})" if name else symbol
-        logger.info(f"매도 주문: {_label} {quantity}주 @ {price}원")
-        return OrderResult(
-            order_id=data["output"]["ODNO"],
-            symbol=symbol,
-            side="SELL",
-            quantity=quantity,
-            price=price,
-            status="SUBMITTED",
-            timestamp=datetime.now(),
-        )
+
+        last_exc: Exception = RuntimeError("sell 재시도 초과")
+        for attempt in range(3):
+            if attempt > 0:
+                await asyncio.sleep(attempt)  # 1초, 2초 대기
+            try:
+                headers = await self._headers(tr_id)
+                resp = await self._client.post(
+                    f"{self._base_url}/uapi/domestic-stock/v1/trading/order-cash",
+                    headers=headers,
+                    json=body,
+                )
+                if resp.status_code == 500:
+                    last_exc = httpx.HTTPStatusError(
+                        f"500 Internal Server Error (attempt {attempt + 1})",
+                        request=resp.request,
+                        response=resp,
+                    )
+                    logger.warning(f"[KIS] 매도 주문 {_label} 500 — {attempt + 1}/3 재시도")
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("rt_cd") != "0":
+                    raise RuntimeError(data.get("msg1", str(data)))
+                logger.info(f"매도 주문: {_label} {quantity}주 @ {price}원")
+                return OrderResult(
+                    order_id=data["output"]["ODNO"],
+                    symbol=symbol,
+                    side="SELL",
+                    quantity=quantity,
+                    price=price,
+                    status="SUBMITTED",
+                    timestamp=datetime.now(),
+                )
+            except (httpx.HTTPStatusError, RuntimeError):
+                raise
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[KIS] 매도 주문 {_label} 오류 (attempt {attempt + 1}): {e}")
+        raise last_exc
 
     async def get_order_status(self, order_id: str) -> dict:
         """주문 체결 조회
