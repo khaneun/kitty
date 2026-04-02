@@ -331,7 +331,7 @@ class KISBroker:
             logger.warning(f"주문 취소 실패: {data.get('msg1')}")
         return success
 
-    async def get_volume_rank(self, count: int = 20) -> list[dict[str, Any]]:
+    async def get_volume_rank(self, count: int = 50) -> list[dict[str, Any]]:
         """거래량 상위 종목 조회 (TR: FHPST01710000)
 
         Returns:

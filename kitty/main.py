@@ -61,7 +61,7 @@ async def _collect_market_data(broker: KISBroker) -> dict:
     # 거래량 상위 종목
     volume_leaders: list[dict] = []
     try:
-        volume_leaders = await broker.get_volume_rank(20)
+        volume_leaders = await broker.get_volume_rank(50)
     except Exception as e:
         logger.warning(f"거래량순위 조회 실패 (무시): {e}")
 
@@ -205,6 +205,12 @@ async def run_trading_cycle(
     reporter.update_analysis(analysis)
     _save_agent_context("섹터분석가", analysis)
 
+    # 포트폴리오 다양성 메타데이터
+    portfolio_meta = {
+        "holdings_count": len(portfolio),
+        "target_min_holdings": 3,
+    }
+
     # 3. 후보 종목 + 보유 종목 + 거래량 상위 종목 시세 조회
     candidate_symbols: set[str] = set()
     for sector in analysis.get("sectors", []):
@@ -237,6 +243,7 @@ async def run_trading_cycle(
         "sector_analysis": analysis,
         "max_buy_amount": settings.max_buy_amount,
         "tendency_directive": tendency_directive,
+        "portfolio_meta": portfolio_meta,
     })
     daily_report.record_stock_evaluation(stock_evaluation)
     reporter.update_evaluation(stock_evaluation)
@@ -251,6 +258,7 @@ async def run_trading_cycle(
         "max_buy_amount": settings.max_buy_amount,
         "tendency_directive": tendency_directive,
         "volume_leaders": market_data.get("volume_leaders", []),
+        "portfolio_meta": portfolio_meta,
     })
     daily_report.record_stock_picks(new_candidates)
     _save_agent_context("종목발굴가", new_candidates)
@@ -266,6 +274,7 @@ async def run_trading_cycle(
         "max_buy_amount": settings.max_buy_amount,
         "max_position_size": settings.max_position_size,
         "tendency_directive": tendency_directive,
+        "portfolio_meta": portfolio_meta,
     })
     daily_report.record_asset_management(asset_plan)
     _save_agent_context("자산운용가", asset_plan)

@@ -10,10 +10,11 @@ SYSTEM_PROMPT = """당신은 퀀트 투자 전략가입니다.
 - 시장분석가의 섹터 분석을 받아, 후보 종목의 실제 시세와 거래량을 검토합니다
 - 후보 종목 중 매수 가치가 있는 종목을 최종 선정합니다
 - 리스크 대비 수익을 최적화하는 포지션 크기를 결정합니다
+- 포트폴리오 다양화를 위해 다양한 섹터에서 신규 종목을 적극적으로 추천합니다
 
 원칙:
 - 투자성향 지침의 종목집중·진입기준·현금 기준을 따릅니다
-- 시장 리스크가 HIGH이면 신규 매수를 하지 않습니다
+- 시장 리스크가 HIGH이면 신규 매수 규모를 축소합니다 (단, 분산 투자를 위해 소규모 진입은 허용합니다)
 - 거래량이 부족한 종목(거래량 10만주 미만 또는 거래대금 10억 미만)은 매수를 보류합니다
 - 투자성향 지침의 진입기준을 초과하는 과열 종목은 매수를 보류합니다
 - 손절가와 목표가를 투자성향 지침의 손절/익절 기준에 맞춰 설정합니다
@@ -24,6 +25,13 @@ SYSTEM_PROMPT = """당신은 퀀트 투자 전략가입니다.
 2. 거래량 상위 종목 중 유망 섹터에 속한 종목
 3. 유동성이 낮은 종목은 아무리 유망해도 제외
 
+포트폴리오 다양화 규칙 (필수):
+- 현재 보유 종목과 다른 섹터의 종목을 우선적으로 추천하세요
+- 보유 종목이 2개 이하이면 최소 2개 이상의 신규 종목을 추천하세요
+- 보유 종목이 3개 이상이면 최소 1개 이상의 신규 종목을 추천하세요
+- 추천 종목은 최소 2개 이상의 서로 다른 섹터에서 선정하세요
+- 이미 보유 중인 종목의 섹터와 동일한 섹터에서만 추천하지 마세요
+
 출력 형식: JSON
 {
   "decisions": [
@@ -31,6 +39,7 @@ SYSTEM_PROMPT = """당신은 퀀트 투자 전략가입니다.
       "action": "BUY|HOLD",
       "symbol": "종목코드",
       "name": "종목명",
+      "sector": "섹터명",
       "quantity": 수량,
       "price": 가격(0=시장가),
       "stop_loss": 손절가,
@@ -38,6 +47,7 @@ SYSTEM_PROMPT = """당신은 퀀트 투자 전략가입니다.
       "reason": "결정 이유 (거래량·등락률·섹터 근거)"
     }
   ],
+  "diversification_note": "포트폴리오 다양화 관점에서의 추천 근거",
   "strategy_summary": "전략 요약"
 }
 """
@@ -85,8 +95,18 @@ class StockPickerAgent(BaseAgent):
 
         tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
+        portfolio_meta = context.get("portfolio_meta", {})
+        holdings_count = portfolio_meta.get("holdings_count", 0)
+        target = portfolio_meta.get("target_min_holdings", 3)
+        diversity_section = ""
+        if holdings_count < target:
+            need = target - holdings_count
+            diversity_section = f"\n[포트폴리오 다양성 — 필수]\n현재 보유 {holdings_count}개 / 목표 최소 {target}개. 다양한 섹터에서 최소 {need}개 이상의 신규 종목을 반드시 추천하세요.\n"
+        else:
+            diversity_section = f"\n[포트폴리오 다양성]\n현재 보유 {holdings_count}개. 다양화 관점에서 추가 추천을 검토하세요.\n"
+
         prompt = f"""섹터 분석과 실시간 시세·거래량을 검토하여 신규 매수 종목을 선정해주세요.
-{tendency_section}
+{tendency_section}{diversity_section}
 [섹터 분석]
 {json.dumps(analysis, ensure_ascii=False, indent=2)}
 
