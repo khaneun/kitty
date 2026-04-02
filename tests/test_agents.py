@@ -1,6 +1,7 @@
 """에이전트 기본 동작 테스트"""
 import pytest
-from unittest.mock import AsyncMock, patch
+import httpx
+from unittest.mock import AsyncMock, Mock, patch
 
 
 @pytest.mark.asyncio
@@ -41,3 +42,77 @@ async def test_strategist_no_decision_on_high_risk():
         })
 
     assert result["decisions"] == []
+
+
+# ── 주가 조회 테스트 ──────────────────────────────────────────────────
+
+def _mock_token_resp() -> Mock:
+    """토큰 발급 mock 응답"""
+    resp = Mock()
+    resp.status_code = 200
+    resp.json.return_value = {"access_token": "test-token"}
+    resp.raise_for_status = Mock()
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_get_quote_success():
+    """주가 조회 성공 — 200 응답 시 StockQuote 반환"""
+    quote_resp = Mock()
+    quote_resp.status_code = 200
+    quote_resp.raise_for_status = Mock()
+    quote_resp.json.return_value = {
+        "output": {
+            "hts_kor_isnm": "삼성전자",
+            "stck_prpr": "75000",
+            "prdy_ctrt": "1.35",
+            "acml_vol": "15000000",
+        }
+    }
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _mock_token_resp()
+    mock_client.get.return_value = quote_resp
+
+    with patch("kitty.broker.kis.settings") as mock_settings, \
+         patch("kitty.broker.kis.httpx.AsyncClient", return_value=mock_client):
+        mock_settings.active_kis_base_url = "https://mock-api"
+        mock_settings.active_kis_app_key = "test-key"
+        mock_settings.active_kis_app_secret = "test-secret"
+
+        from kitty.broker.kis import KISBroker
+        broker = KISBroker()
+        result = await broker.get_quote("005930")
+
+    assert result.symbol == "005930"
+    assert result.name == "삼성전자"
+    assert result.current_price == 75000
+    assert result.change_rate == 1.35
+    assert result.volume == 15_000_000
+
+
+@pytest.mark.asyncio
+async def test_get_quote_500_error():
+    """주가 조회 시 500 에러 — HTTPStatusError 발생"""
+    error_resp = Mock()
+    error_resp.status_code = 500
+    error_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "500 Internal Server Error",
+        request=Mock(),
+        response=error_resp,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _mock_token_resp()
+    mock_client.get.return_value = error_resp
+
+    with patch("kitty.broker.kis.settings") as mock_settings, \
+         patch("kitty.broker.kis.httpx.AsyncClient", return_value=mock_client):
+        mock_settings.active_kis_base_url = "https://mock-api"
+        mock_settings.active_kis_app_key = "test-key"
+        mock_settings.active_kis_app_secret = "test-secret"
+
+        from kitty.broker.kis import KISBroker
+        broker = KISBroker()
+        with pytest.raises(httpx.HTTPStatusError):
+            await broker.get_quote("005930")
