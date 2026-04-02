@@ -4,6 +4,7 @@ Docs: https://apiportal.koreainvestment.com
 실전: https://openapi.koreainvestment.com:9443
 모의: https://openapivts.koreainvestment.com:9443
 """
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -85,22 +86,43 @@ class KISBroker:
         }
 
     async def get_quote(self, symbol: str) -> StockQuote:
-        """현재가 조회 (TR: FHKST01010100)"""
-        headers = await self._headers("FHKST01010100")
-        resp = await self._client.get(
-            f"{self._base_url}/uapi/domestic-stock/v1/quotations/inquire-price",
-            headers=headers,
-            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol},
-        )
-        resp.raise_for_status()
-        output = resp.json()["output"]
-        return StockQuote(
-            symbol=symbol,
-            name=output.get("hts_kor_isnm", ""),
-            current_price=int(output.get("stck_prpr", 0)),
-            change_rate=float(output.get("prdy_ctrt", 0.0)),
-            volume=int(output.get("acml_vol", 0)),
-        )
+        """현재가 조회 (TR: FHKST01010100)
+        KIS API rate limit 대응: 500 응답 시 최대 3회 재시도 (1s, 2s 간격)
+        """
+        last_exc: Exception = RuntimeError("get_quote 재시도 초과")
+        for attempt in range(3):
+            if attempt > 0:
+                await asyncio.sleep(attempt)  # 1초, 2초 대기
+            try:
+                headers = await self._headers("FHKST01010100")
+                resp = await self._client.get(
+                    f"{self._base_url}/uapi/domestic-stock/v1/quotations/inquire-price",
+                    headers=headers,
+                    params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol},
+                )
+                if resp.status_code == 500:
+                    last_exc = httpx.HTTPStatusError(
+                        f"500 Internal Server Error (attempt {attempt + 1})",
+                        request=resp.request,
+                        response=resp,
+                    )
+                    logger.warning(f"[KIS] {symbol} 주가 조회 500 — {attempt + 1}/3 재시도")
+                    continue
+                resp.raise_for_status()
+                output = resp.json()["output"]
+                return StockQuote(
+                    symbol=symbol,
+                    name=output.get("hts_kor_isnm", ""),
+                    current_price=int(output.get("stck_prpr", 0)),
+                    change_rate=float(output.get("prdy_ctrt", 0.0)),
+                    volume=int(output.get("acml_vol", 0)),
+                )
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[KIS] {symbol} 주가 조회 오류 (attempt {attempt + 1}): {e}")
+        raise last_exc
 
     async def get_balance(self) -> dict[str, Any]:
         """주식 잔고 조회
