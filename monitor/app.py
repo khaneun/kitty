@@ -819,14 +819,14 @@ body{padding-bottom:80px}
     <div class="sec-title">현재 포트폴리오</div>
 
     <div class="cards" id="pf-summary-cards" style="margin-bottom:10px">
-      <div class="card"><div class="lbl">총평가금액</div><div class="num blue"  id="pf-total-eval">-</div></div>
-      <div class="card"><div class="lbl">평가손익</div><div class="num"       id="pf-total-pnl">-</div></div>
-      <div class="card"><div class="lbl">주문가능현금</div><div class="num gray"  id="pf-cash">-</div></div>
+      <div class="card"><div class="lbl">총평가금액(원)</div><div class="num blue"  id="pf-total-eval">-</div></div>
+      <div class="card"><div class="lbl">평가손익(원)</div><div class="num"       id="pf-total-pnl">-</div></div>
+      <div class="card"><div class="lbl">주문가능현금(원)</div><div class="num gray"  id="pf-cash">-</div></div>
     </div>
     <div class="pf-wrap">
       <table class="pf">
         <thead><tr>
-          <th>종목</th><th>수량(주)</th><th>평균단가(원)</th><th>현재가(원)</th><th>수익률(%)</th><th>평가금액</th>
+          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률</th><th>평가금액</th>
         </tr></thead>
         <tbody id="pf-tbody"><tr><td colspan="6" class="empty">로딩 중...</td></tr></tbody>
       </table>
@@ -1146,7 +1146,7 @@ function toggleReport() {
 async function loadPortfolio() {
   try {
     const d = await fetch('/api/portfolio').then(r=>r.json());
-    const fmtW = n => n.toLocaleString('ko-KR')+'원';
+    const fmtW = n => n.toLocaleString('ko-KR');
     const pnlColor = n => n>=0?'#3fb950':'#f85149';
 
     // GNB 셀렉터 동기화
