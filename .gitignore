@@ -31,18 +31,18 @@ htmlcov/
 # Claude Code
 .claude/
 
-# 로그 / 리포트 / 데이터
-logs/
-reports/
-night-logs/
-night-reports/
-night-feedback/
-night-token_usage/
-night-commands/
-feedback/
-token_usage/
-monitor-data/
-commands/
+# 로그 / 리포트 / 데이터 (런타임 생성 디렉토리 — 루트 기준)
+/logs/
+/reports/
+/night-logs/
+/night-reports/
+/night-feedback/
+/night-token_usage/
+/night-commands/
+/feedback/
+/token_usage/
+/monitor-data/
+/commands/
 *.log
 
 # Night 환경변수
