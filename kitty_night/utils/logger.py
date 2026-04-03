@@ -18,6 +18,14 @@ def setup_night_logger(level: str = "INFO") -> None:
         level=level,
         encoding="utf-8",
     )
+    # ERROR/WARNING/CRITICAL 전용 로그 — monitor가 이 파일만 스캔
+    logger.add(
+        "night-logs/kitty-night_errors_{time:YYYY-MM-DD}.log",
+        rotation="00:00",
+        retention="30 days",
+        level="WARNING",
+        encoding="utf-8",
+    )
 
 
 __all__ = ["logger", "setup_night_logger"]

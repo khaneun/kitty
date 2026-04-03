@@ -391,7 +391,7 @@ async def main() -> None:
 
     daily_report = DailyReport()
 
-    _last_cycle_time: float = 0.0
+    _last_cycle_time: float = time.monotonic()
 
     async def _cycle_now() -> None:
         nonlocal _last_cycle_time

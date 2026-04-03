@@ -139,13 +139,18 @@ def scan_file(path: Path, conn: sqlite3.Connection) -> list[dict]:
     row = conn.execute("SELECT position FROM file_pos WHERE filename=?", (filename,)).fetchone()
     start = row["position"] if row else 0
     try:
-        raw = path.read_bytes()
+        file_size = path.stat().st_size
     except OSError:
         return []
-    new_bytes = raw[start:]
-    if not new_bytes:
+    if file_size <= start:
         return []
     entries = []
+    try:
+        with path.open("rb") as f:
+            f.seek(start)
+            new_bytes = f.read()
+    except OSError:
+        return []
     for line in new_bytes.decode("utf-8", errors="replace").splitlines():
         m = _RE.match(line)
         if not m:
@@ -160,7 +165,7 @@ def scan_file(path: Path, conn: sqlite3.Connection) -> list[dict]:
     conn.execute(
         "INSERT INTO file_pos(filename,position) VALUES(?,?) "
         "ON CONFLICT(filename) DO UPDATE SET position=excluded.position",
-        (filename, len(raw)),
+        (filename, file_size),
     )
     conn.commit()
     return entries
@@ -171,8 +176,12 @@ def _last_log_ts() -> Optional[str]:
     latest = None
     for path in sorted(LOG_DIR.glob("kitty_*.log"), reverse=True)[:2]:
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            for line in reversed(text.splitlines()):
+            size = path.stat().st_size
+            tail_size = min(size, 8192)
+            with path.open("rb") as f:
+                f.seek(size - tail_size)
+                tail = f.read().decode("utf-8", errors="replace")
+            for line in reversed(tail.splitlines()):
                 m = _RE_ANY.match(line)
                 if m:
                     ts = m.group(1)
@@ -231,9 +240,10 @@ async def _check_alerts(new_entries: list[dict]) -> None:
 
 async def _watcher() -> None:
     conn = _db()
-    for path in sorted(LOG_DIR.glob("kitty_*.log")):
+    # ERROR 전용 로그만 스캔 (kitty_errors_*.log) — 전체 로그(kitty_*.log)는 수 GB가 될 수 있음
+    for path in sorted(LOG_DIR.glob("kitty_errors_*.log")):
         scan_file(path, conn)
-    for path in sorted(NIGHT_LOG_DIR.glob("kitty-night_*.log")):
+    for path in sorted(NIGHT_LOG_DIR.glob("kitty-night_errors_*.log")):
         scan_file(path, conn)
     cleanup_old(conn)
     conn.close()
@@ -241,9 +251,9 @@ async def _watcher() -> None:
         await asyncio.sleep(POLL_SEC)
         conn = _db()
         new: list[dict] = []
-        for path in sorted(LOG_DIR.glob("kitty_*.log")):
+        for path in sorted(LOG_DIR.glob("kitty_errors_*.log")):
             new.extend(scan_file(path, conn))
-        for path in sorted(NIGHT_LOG_DIR.glob("kitty-night_*.log")):
+        for path in sorted(NIGHT_LOG_DIR.glob("kitty-night_errors_*.log")):
             new.extend(scan_file(path, conn))
         if _now().hour == 0 and _now().minute < 1:
             cleanup_old(conn)
