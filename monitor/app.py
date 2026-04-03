@@ -344,11 +344,12 @@ def api_stats(req: Request):
     _auth(req)
     today = _now().strftime("%Y-%m-%d")
     with _db() as c:
+        cutoff_date = (_now() - timedelta(days=13)).strftime("%Y-%m-%d")
         daily = c.execute("""
             SELECT date, level, COUNT(*) cnt FROM errors
-            WHERE date >= date('now','-13 days')
+            WHERE date >= ?
             GROUP BY date, level ORDER BY date
-        """).fetchall()
+        """, (cutoff_date,)).fetchall()
         totals = c.execute(
             "SELECT level, COUNT(*) cnt FROM errors GROUP BY level"
         ).fetchall()
@@ -680,7 +681,12 @@ table.log tr:hover td{background:#161b22}
 .t-aggressive{background:#2d1b00;color:#f0883e;border:1px solid #5c3a00}
 .t-balanced{background:#0d2d3d;color:#58a6ff;border:1px solid #1a4a6e}
 .t-conservative{background:#1a2a1a;color:#3fb950;border:1px solid #2a4a2a}
-.tendency-rationale{font-size:11px;color:#6e7681;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tendency-rationale{font-size:11px;color:#6e7681;flex:1;min-width:0}
+/* 종합 평가 리포트 (접기/펼치기) */
+.td-report{margin-top:10px;padding-top:8px;border-top:1px solid #21262d}
+.td-report-title{font-size:10px;color:#8b949e;font-weight:600;margin-bottom:5px;letter-spacing:.3px}
+.td-report-text{font-size:11px;color:#8b949e;line-height:1.6;word-break:break-word}
+.td-report-more{background:none;border:none;color:#58a6ff;font-size:10px;cursor:pointer;padding:0 0 0 4px;vertical-align:baseline;text-decoration:underline}
 .tendency-dims{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
 .td-dim{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:6px 8px;min-width:0}
 .td-dim-name{display:block;font-size:9px;color:#484f58;letter-spacing:.4px;text-transform:uppercase;margin-bottom:3px}
@@ -688,8 +694,12 @@ table.log tr:hover td{background:#161b22}
 .lv-1{background:#3d1a00;color:#ff8c00}.lv-2{background:#2d1b00;color:#f0883e}
 .lv-3{background:#1a2a3d;color:#79c0ff}.lv-4{background:#0d2d3d;color:#58a6ff}
 .lv-5{background:#1a2a1a;color:#3fb950}.lv-6{background:#0d1f0d;color:#2ea043}
-.td-dim-val{display:block;font-size:12px;font-weight:700;color:#c9d1d9}
+.td-dim-val{display:block;font-size:10px;font-weight:600;color:#c9d1d9}
 .td-dim-sub{display:block;font-size:9px;color:#484f58;margin-top:1px}
+/* 포트폴리오 요약 카드 — 라벨 상단 좌측, 금액 폰트 축소 */
+#pf-summary-cards .card{text-align:left;padding:10px 12px}
+#pf-summary-cards .card .lbl{margin-top:0;margin-bottom:5px;letter-spacing:0;text-transform:none}
+#pf-summary-cards .card .num{font-size:17px}
 /* 서브탭 (관리 영역) */
 .subtabs{display:flex;background:#0d1117;border-bottom:1px solid #21262d;position:sticky;top:83px;z-index:98;overflow-x:auto}
 .subtab{padding:7px 16px;font-size:11px;color:#484f58;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0;letter-spacing:.3px}
@@ -742,30 +752,10 @@ body{padding-bottom:80px}
   <div class="tab" id="main-tab-admin" onclick="switchMain('admin')">⚙️ 관리</div>
 </div>
 <div class="subtabs" id="subtabs" style="display:none">
-  <div class="subtab active" id="sub-tab-health" onclick="switchAdmin('health')">🏥 상태</div>
-  <div class="subtab" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
+  <div class="subtab active" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
   <div class="subtab" id="sub-tab-tokens" onclick="switchAdmin('tokens')">🔢 토큰</div>
 </div>
 
-<!-- ══ 상태 (관리 서브) ══ -->
-<div id="tab-health" class="tab-content">
-<div class="wrap">
-  <div id="status-badge" class="status-badge status-ok">⏳ 로딩 중...</div>
-  <div class="cards">
-    <div class="card"><div class="num red"   id="h-err-today">-</div><div class="lbl">오늘 에러</div></div>
-    <div class="card"><div class="num yellow" id="h-warn-today">-</div><div class="lbl">오늘 경고</div></div>
-    <div class="card"><div class="num red"   id="h-err-1h">-</div><div class="lbl">1시간 에러</div></div>
-  </div>
-  <div class="section">
-    <div class="sec-title">최근 마지막 로그</div>
-    <div id="h-last-log" style="font-size:13px;color:#8b949e;padding:4px 0">-</div>
-  </div>
-  <div class="section">
-    <div class="sec-title">최근 에러 5건</div>
-    <div id="h-recent-errors"><div class="empty">없음 ✅</div></div>
-  </div>
-</div>
-</div>
 
 <!-- ══ 에러 로그 탭 ══ -->
 <div id="tab-errors" class="tab-content">
@@ -808,7 +798,6 @@ body{padding-bottom:80px}
   <div id="tendency-card" class="tendency-card" style="display:none">
     <div class="tendency-header">
       <span id="td-badge" class="tendency-badge">-</span>
-      <div id="td-rationale" class="tendency-rationale">-</div>
     </div>
     <div class="tendency-dims" id="td-dims">
       <div class="td-dim"><span class="td-dim-name">익절</span><span id="td-tp-lv" class="td-dim-lv lv-2">L2</span><span id="td-tp" class="td-dim-val">-</span><span id="td-tp-sub" class="td-dim-sub">-</span></div>
@@ -817,20 +806,27 @@ body{padding-bottom:80px}
       <div class="td-dim"><span class="td-dim-name">집중도</span><span id="td-wt-lv" class="td-dim-lv lv-2">L2</span><span id="td-wt" class="td-dim-val">-</span><span id="td-wt-sub" class="td-dim-sub">-</span></div>
       <div class="td-dim"><span class="td-dim-name">진입기준</span><span id="td-en-lv" class="td-dim-lv lv-2">L2</span><span id="td-en" class="td-dim-val">-</span><span id="td-en-sub" class="td-dim-sub">-</span></div>
     </div>
+    <!-- 종합 평가 리포트 -->
+    <div class="td-report" id="td-report" style="display:none">
+      <div class="td-report-title" id="td-report-title"></div>
+      <div class="td-report-text">
+        <span id="td-report-preview"></span><span id="td-report-full" style="display:none"></span><button class="td-report-more" id="td-report-more" onclick="toggleReport()">more</button>
+      </div>
+    </div>
   </div>
   <!-- 포트폴리오 현황 -->
   <div class="section">
     <div class="sec-title">현재 포트폴리오</div>
 
     <div class="cards" id="pf-summary-cards" style="margin-bottom:10px">
-      <div class="card"><div class="num blue"  id="pf-total-eval">-</div><div class="lbl">총평가금액</div></div>
-      <div class="card"><div class="num"       id="pf-total-pnl">-</div><div class="lbl">평가손익</div></div>
-      <div class="card"><div class="num gray"  id="pf-cash">-</div><div class="lbl">주문가능현금</div></div>
+      <div class="card"><div class="lbl">총평가금액</div><div class="num blue"  id="pf-total-eval">-</div></div>
+      <div class="card"><div class="lbl">평가손익</div><div class="num"       id="pf-total-pnl">-</div></div>
+      <div class="card"><div class="lbl">주문가능현금</div><div class="num gray"  id="pf-cash">-</div></div>
     </div>
     <div class="pf-wrap">
       <table class="pf">
         <thead><tr>
-          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률</th><th>평가금액</th>
+          <th>종목</th><th>수량(주)</th><th>평균단가(원)</th><th>현재가(원)</th><th>수익률(%)</th><th>평가금액</th>
         </tr></thead>
         <tbody id="pf-tbody"><tr><td colspan="6" class="empty">로딩 중...</td></tr></tbody>
       </table>
@@ -918,14 +914,14 @@ body{padding-bottom:80px}
 
 <script>
 // ── 탭 전환 ─────────────────────────────────────────────
-let _adminTab = 'health';
+let _adminTab = 'errors';
 
 function switchMain(name) {
   const isAgents = name === 'agents';
   document.getElementById('main-tab-agents').classList.toggle('active', isAgents);
   document.getElementById('main-tab-admin').classList.toggle('active', !isAgents);
   document.getElementById('subtabs').style.display = isAgents ? 'none' : 'flex';
-  ['health','errors','tokens','agents'].forEach(n => {
+  ['errors','tokens','agents'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
   if(isAgents) {
@@ -938,12 +934,11 @@ function switchMain(name) {
 
 function switchAdmin(name) {
   _adminTab = name;
-  ['health','errors','tokens'].forEach(n => {
+  ['errors','tokens'].forEach(n => {
     document.getElementById('sub-tab-'+n).classList.toggle('active', n===name);
     document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
   document.getElementById('tab-agents').classList.remove('active');
-  if(name==='health'){ loadHealth(); loadStats(); }
   if(name==='errors'){ loadStats(); loadErrors(); }
   if(name==='tokens') loadTokens();
 }
@@ -957,7 +952,8 @@ function closeChat() {
   document.getElementById('chat-popup').classList.remove('open');
 }
 
-const today = new Date().toISOString().slice(0,10);
+const _kst = new Date(Date.now() + 9*60*60*1000);
+const today = _kst.toISOString().slice(0,10);
 document.getElementById('f-date').value = today;
 
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1113,14 +1109,37 @@ async function loadTendency() {
     const badge = document.getElementById('td-badge');
     badge.textContent = d.label || d.profile_name;
     badge.className = 'tendency-badge t-' + d.profile_name;
-    document.getElementById('td-rationale').textContent = d.rationale || '';
     const lv = d.levels || {};
     setDimCell('td-tp',   lv.take_profit||2, d.take_profit_pct!=null?'+'+d.take_profit_pct+'%':'-');
     setDimCell('td-sl',   lv.stop_loss  ||2, d.stop_loss_pct  !=null?d.stop_loss_pct+'%'      :'-');
     setDimCell('td-cash', lv.cash       ||2, d.cash_reserve_min!=null?Math.round(d.cash_reserve_min*100)+'%이상':'-');
     setDimCell('td-wt',   lv.max_weight ||2, d.max_weight_pct !=null?'최대 '+d.max_weight_pct+'%':'-');
     setDimCell('td-en',   lv.entry      ||2, d.entry_threshold_pct!=null?'±'+d.entry_threshold_pct+'%':'-');
+    // 종합 평가 리포트
+    const rationale = d.rationale || '';
+    if(rationale) {
+      const m = (d.ts||'').match(/(\d{4})-(\d{2})-(\d{2})/);
+      const title = m ? `${parseInt(m[2])}월 ${parseInt(m[3])}일 종합 평가 Report` : '종합 평가 Report';
+      const LIMIT = 40;
+      document.getElementById('td-report-title').textContent = title;
+      document.getElementById('td-report-preview').textContent = rationale.length > LIMIT ? rationale.slice(0, LIMIT)+'...' : rationale;
+      document.getElementById('td-report-full').textContent   = rationale;
+      document.getElementById('td-report-full').style.display = 'none';
+      document.getElementById('td-report-more').textContent   = 'more';
+      document.getElementById('td-report-more').style.display = rationale.length > LIMIT ? '' : 'none';
+      document.getElementById('td-report').style.display = '';
+    }
   } catch(e){ console.error('tendency',e); }
+}
+
+function toggleReport() {
+  const preview = document.getElementById('td-report-preview');
+  const full    = document.getElementById('td-report-full');
+  const btn     = document.getElementById('td-report-more');
+  const expanded = full.style.display !== 'none';
+  preview.style.display = expanded ? '' : 'none';
+  full.style.display    = expanded ? 'none' : '';
+  btn.textContent       = expanded ? 'more' : 'less';
 }
 
 // ── 포트폴리오 탭 ────────────────────────────────────────
@@ -1156,10 +1175,10 @@ async function loadPortfolio() {
       const arrow = h.pnl_rt>=0?'▲':'▼';
       return `<tr>
         <td><div class="pf-name">${esc(h.name)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
-        <td>${h.qty.toLocaleString()}주</td>
-        <td>${h.avg.toLocaleString()}원</td>
-        <td>${h.current.toLocaleString()}원</td>
-        <td style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
+        <td>${h.qty.toLocaleString()}</td>
+        <td>${h.avg.toLocaleString()}</td>
+        <td>${h.current.toLocaleString()}</td>
+        <td style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}</td>
         <td style="color:${color}">${h.eval_amt.toLocaleString()}원</td>
       </tr>`;
     }).join('');
@@ -1392,7 +1411,6 @@ setInterval(()=>{
 
 // 관리 탭 30초 자동 갱신 (열려 있을 때만)
 setInterval(()=>{
-  if(document.getElementById('tab-health').classList.contains('active')){ loadHealth(); loadStats(); }
   if(document.getElementById('tab-errors').classList.contains('active')){ loadStats(); loadErrors(); }
   if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
 }, 30000);
