@@ -1,5 +1,6 @@
 """텔레그램 봇 - 보고 및 원격 제어"""
 import asyncio
+import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine
@@ -116,6 +117,10 @@ class TelegramReporter:
             ("restart",    self._cmd_restart),
             ("shutdown",   self._cmd_shutdown),
             ("startall",   self._cmd_startall),
+            # Night mode
+            ("night",      self._cmd_night),
+            ("nportfolio", self._cmd_nportfolio),
+            ("nlogs",      self._cmd_nlogs),
         ]
         for name, handler in cmds:
             self._app.add_handler(CommandHandler(name, self._guard(handler)))
@@ -158,10 +163,14 @@ class TelegramReporter:
             "/dashboard   — 모니터 대시보드 URL\n\n"
             "*AWS 제어*\n"
             "/logs [n]    — 최근 로그 n줄 (기본 50)\n"
-            "/deploy      — 코드 재배포 (git pull + 재빌드)\n"
-            "/restart     — 컨테이너 재시작\n"
-            "/shutdown    — 서비스 전체 중단\n"
-            "/startall    — 서비스 전체 시작"
+            "/deploy      — 전체 재배포 (git pull + 재빌드)\n"
+            "/restart     — 전체 컨테이너 재시작\n"
+            "/shutdown    — 전체 서비스 중단\n"
+            "/startall    — 전체 서비스 시작\n\n"
+            "*🌙 Night Mode (미국주식)*\n"
+            "/night       — Night 상태 요약\n"
+            "/nportfolio  — Night 보유종목 (USD)\n"
+            "/nlogs [n]   — Night 최근 로그 n줄"
         )
         await update.message.reply_text(text, parse_mode="Markdown")  # type: ignore[union-attr]
 
@@ -522,8 +531,8 @@ class TelegramReporter:
         )
 
     async def _cmd_deploy(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("🚀 재배포를 시작합니다. 잠시 후 봇이 재연결됩니다...")  # type: ignore[union-attr]
-        logger.info("[텔레그램] 재배포 요청")
+        await update.message.reply_text("🚀 전체 재배포를 시작합니다. 잠시 후 봇이 재연결됩니다...")  # type: ignore[union-attr]
+        logger.info("[텔레그램] 전체 재배포 요청")
 
         # git pull
         stdout, stderr, rc = await self._run_shell("cd /host/kitty && git pull")
@@ -532,51 +541,151 @@ class TelegramReporter:
             return
         await update.message.reply_text(f"✅ git pull\n```{stdout[:200].strip()}```", parse_mode="Markdown")  # type: ignore[union-attr]
 
-        # docker build
-        await update.message.reply_text("🔨 이미지 빌드 중...")  # type: ignore[union-attr]
-        _, stderr, rc = await self._run_shell("docker build -t kitty-trader /host/kitty", timeout=600)
-        if rc != 0:
-            await update.message.reply_text(f"❌ 빌드 실패\n```{stderr[:300]}```", parse_mode="Markdown")  # type: ignore[union-attr]
-            return
-
-        # 현재 컨테이너 env 추출 후 재기동 (이 시점부터 컨테이너가 교체됨)
-        await update.message.reply_text("🔄 컨테이너 교체 중... (연결이 잠시 끊깁니다)")  # type: ignore[union-attr]
-        restart_cmd = (
-            "docker inspect kitty-trader --format '{{json .Config.Env}}' | "
-            "python3 -c \"import sys,json; [print(x) for x in json.load(sys.stdin)]\" "
-            "> /tmp/kitty_env.txt && "
-            "docker stop kitty-trader && docker rm kitty-trader && "
-            "docker run -d --name kitty-trader --restart unless-stopped "
-            "--env-file /tmp/kitty_env.txt "
-            "-v /home/ec2-user/kitty/logs:/app/logs "
-            "-v /home/ec2-user/kitty/feedback:/app/feedback "
-            "-v /home/ec2-user/kitty/token_usage:/app/token_usage "
-            "-v /var/run/docker.sock:/var/run/docker.sock "
-            "-v /home/ec2-user/kitty:/host/kitty "
-            "kitty-trader && "
-            "rm -f /tmp/kitty_env.txt"
-        )
-        await self._run_shell(restart_cmd)
-        # 컨테이너가 교체되므로 이후 코드는 실행되지 않음
+        # start.sh 실행 (kitty-trader + kitty-night-trader + kitty-monitor 전체 재빌드)
+        await update.message.reply_text("🔨 전체 빌드 중... (kitty + night + monitor)\n연결이 잠시 끊깁니다.")  # type: ignore[union-attr]
+        await self._run_shell("cd /host/kitty && nohup bash start.sh > /tmp/deploy.log 2>&1 &")
+        # start.sh가 현재 컨테이너를 교체하므로 이후 코드는 실행되지 않음
 
     async def _cmd_restart(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("🔄 컨테이너를 재시작합니다. 잠시 후 재연결됩니다...")  # type: ignore[union-attr]
-        logger.info("[텔레그램] 컨테이너 재시작 요청")
-        await self._run_shell("docker restart kitty-trader")
-        # 컨테이너 재시작으로 이후 코드 실행 안 됨
+        await update.message.reply_text("🔄 전체 컨테이너를 재시작합니다. 잠시 후 재연결됩니다...")  # type: ignore[union-attr]
+        logger.info("[텔레그램] 전체 컨테이너 재시작 요청")
+        await self._run_shell("docker restart kitty-night-trader kitty-monitor 2>/dev/null; docker restart kitty-trader")
+        # kitty-trader 재시작으로 이후 코드 실행 안 됨
 
     async def _cmd_shutdown(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("⛔ 모든 서비스를 중단합니다.")  # type: ignore[union-attr]
+        await update.message.reply_text("⛔ 모든 서비스를 중단합니다. (kitty + night + monitor)")  # type: ignore[union-attr]
         logger.info("[텔레그램] 서비스 전체 중단 요청")
-        await self._run_shell("docker stop kitty-trader")
+        await self._run_shell("docker stop kitty-night-trader kitty-monitor 2>/dev/null; docker stop kitty-trader")
 
     async def _cmd_startall(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.message.reply_text("▶️ 서비스를 시작합니다. 잠시 후 재연결됩니다...")  # type: ignore[union-attr]
+        await update.message.reply_text("▶️ 전체 서비스를 시작합니다. 잠시 후 재연결됩니다...")  # type: ignore[union-attr]
         logger.info("[텔레그램] 서비스 전체 시작 요청")
-        # 중단된 컨테이너 재시작 (이미 실행 중이면 무시됨)
+        await self._run_shell("docker start kitty-night-trader kitty-monitor 2>/dev/null")
         _, stderr, rc = await self._run_shell("docker start kitty-trader")
         if rc != 0:
             await update.message.reply_text(f"❌ 시작 실패\n```{stderr[:300]}```", parse_mode="Markdown")  # type: ignore[union-attr]
+
+    # ---- Night mode 명령어 ----
+
+    _NIGHT_SNAPSHOT = Path("/host/kitty/night-logs/night_portfolio_snapshot.json")
+    _NIGHT_CONTEXT = Path("/host/kitty/night-logs/night_agent_context.json")
+    _NIGHT_LOG_DIR = Path("/host/kitty/night-logs")
+
+    async def _cmd_night(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        # 컨테이너 상태
+        stdout, _, _ = await self._run_shell(
+            "docker inspect kitty-night-trader --format '{{.State.Status}}' 2>/dev/null"
+        )
+        container = stdout.strip() or "not found"
+
+        # 포트폴리오 스냅샷
+        mode = "paper"
+        cash = total_eval = total_pnl = 0.0
+        holdings_count = 0
+        snap_ts = "-"
+        if self._NIGHT_SNAPSHOT.exists():
+            try:
+                snap = json.loads(self._NIGHT_SNAPSHOT.read_text(encoding="utf-8"))
+                mode = snap.get("trading_mode", "paper")
+                cash = snap.get("available_cash", 0)
+                total_eval = snap.get("total_eval", 0)
+                total_pnl = snap.get("total_pnl", 0)
+                holdings_count = len(snap.get("holdings", []))
+                snap_ts = snap.get("ts", "-")
+            except Exception:
+                pass
+
+        # 에이전트 컨텍스트 (마지막 사이클 시각)
+        ctx_ts = "-"
+        if self._NIGHT_CONTEXT.exists():
+            try:
+                ctx_data = json.loads(self._NIGHT_CONTEXT.read_text(encoding="utf-8"))
+                for v in ctx_data.values():
+                    t = v.get("ts", "")
+                    if t > ctx_ts:
+                        ctx_ts = t
+            except Exception:
+                pass
+
+        pnl_emoji = "🔺" if total_pnl >= 0 else "🔻"
+        await update.message.reply_text(  # type: ignore[union-attr]
+            f"🌙 *Night Mode 상태*\n"
+            f"컨테이너: `{container}`\n"
+            f"모드: `{mode}`\n"
+            f"마지막 사이클: `{ctx_ts}`\n\n"
+            f"보유종목: `{holdings_count}`\n"
+            f"현금: `${cash:,.2f}`\n"
+            f"총평가: `${total_eval:,.2f}`\n"
+            f"{pnl_emoji} 평가손익: `${total_pnl:+,.2f}`",
+            parse_mode="Markdown",
+        )
+
+    async def _cmd_nportfolio(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._NIGHT_SNAPSHOT.exists():
+            await update.message.reply_text("📭 Night 포트폴리오 데이터 없음")  # type: ignore[union-attr]
+            return
+        try:
+            snap = json.loads(self._NIGHT_SNAPSHOT.read_text(encoding="utf-8"))
+        except Exception:
+            await update.message.reply_text("❌ 데이터 읽기 실패")  # type: ignore[union-attr]
+            return
+
+        holdings = snap.get("holdings", [])
+        if not holdings:
+            await update.message.reply_text(
+                f"📭 *Night 보유 종목 없음*\n현금: `${snap.get('available_cash', 0):,.2f}`",
+                parse_mode="Markdown",
+            )  # type: ignore[union-attr]
+            return
+
+        lines = ["🌙 *Night 보유 종목*\n"]
+        for h in holdings:
+            sym = h.get("symbol", "?")
+            name = h.get("name", "")
+            qty = int(h.get("quantity", 0))
+            avg = float(h.get("avg_price", 0))
+            pnl_rate = float(h.get("pnl_rate", 0))
+            eval_amt = float(h.get("eval_amount", 0))
+            emoji = "🔺" if pnl_rate >= 0 else "🔻"
+            label = f"{name}({sym})" if name else sym
+            lines.append(f"{emoji} `{label}`\n   {qty}주 @ ${avg:,.2f} ({pnl_rate:+.1f}%) → ${eval_amt:,.2f}")
+
+        cash = snap.get("available_cash", 0)
+        total = snap.get("total_eval", 0)
+        pnl = snap.get("total_pnl", 0)
+        lines.append(f"\n현금: `${cash:,.2f}` | 총평가: `${total:,.2f}` ({pnl:+,.2f})")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")  # type: ignore[union-attr]
+
+    async def _cmd_nlogs(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        args = ctx.args or []
+        n = 50
+        if args:
+            try:
+                n = min(int(args[0]), 200)
+            except ValueError:
+                pass
+
+        log_file = self._NIGHT_LOG_DIR / f"kitty-night_{date.today()}.log"
+        if not log_file.exists():
+            # Docker 로그로 폴백
+            stdout, _, _ = await self._run_shell(f"docker logs kitty-night-trader --tail {n} 2>&1")
+            if not stdout.strip():
+                await update.message.reply_text("📭 Night 로그 없음")  # type: ignore[union-attr]
+                return
+            tail = stdout.strip()
+        else:
+            lines = log_file.read_text(encoding="utf-8").splitlines()
+            tail = "\n".join(lines[-n:])
+
+        if not tail:
+            await update.message.reply_text("📭 Night 로그 없음")  # type: ignore[union-attr]
+            return
+        if len(tail) > 3800:
+            tail = "...(생략)...\n" + tail[-3800:]
+        await update.message.reply_text(  # type: ignore[union-attr]
+            f"🌙 *Night 최근 로그*\n```\n{tail}\n```",
+            parse_mode="Markdown",
+        )
 
     # ---- 속성 ----
 

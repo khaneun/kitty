@@ -46,6 +46,7 @@ mkdir -p /home/ec2-user/kitty/commands
 docker run -d \
   --name kitty-trader \
   --restart unless-stopped \
+  --log-opt max-size=10m --log-opt max-file=5 \
   --env-file /home/ec2-user/kitty/.env \
   -v /home/ec2-user/kitty/logs:/app/logs \
   -v /home/ec2-user/kitty/feedback:/app/feedback \
@@ -112,6 +113,7 @@ NIGHTEOF
 docker run -d \
   --name kitty-night-trader \
   --restart unless-stopped \
+  --log-opt max-size=10m --log-opt max-file=5 \
   --env-file /home/ec2-user/kitty/.env.night \
   -v /home/ec2-user/kitty/night-logs:/app/night-logs \
   -v /home/ec2-user/kitty/night-feedback:/app/night-feedback \
@@ -124,6 +126,7 @@ docker run -d \
 docker run -d \
   --name kitty-monitor \
   --restart unless-stopped \
+  --log-opt max-size=5m --log-opt max-file=3 \
   -v /home/ec2-user/kitty/logs:/logs:ro \
   -v /home/ec2-user/kitty/feedback:/feedback:ro \
   -v /home/ec2-user/kitty/token_usage:/token_usage:ro \

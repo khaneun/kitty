@@ -28,8 +28,10 @@ from kitty_night.tools.market_calendar import (
     now_kst,
     seconds_until,
 )
-from kitty_night.utils import logger
+from kitty_night.utils import logger, setup_night_logger
 from kitty_night.utils.portfolio import save_portfolio_snapshot
+
+setup_night_logger()
 
 _KST = ZoneInfo("Asia/Seoul")
 _AGENT_CONTEXT_PATH = Path("night-logs/night_agent_context.json")
