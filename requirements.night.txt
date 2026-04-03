@@ -1,0 +1,17 @@
+# ===== Kitty Night Mode 의존성 =====
+anthropic>=0.40.0
+python-telegram-bot>=21.0
+httpx>=0.27.0
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
+loguru>=0.7
+apscheduler>=3.10
+aiohttp>=3.9
+
+# ===== AI Provider (사용하는 것만 설치) =====
+openai>=1.30
+# google-generativeai>=0.7  # Gemini 사용 시 주석 해제
+
+# ===== Night Mode 전용 =====
+exchange-calendars>=4.5        # NYSE/NASDAQ 휴장일 캘린더

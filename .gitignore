@@ -31,10 +31,22 @@ htmlcov/
 # Claude Code
 .claude/
 
-# 로그 / 리포트
+# 로그 / 리포트 / 데이터
 logs/
 reports/
+night-logs/
+night-reports/
+night-feedback/
+night-token_usage/
+night-commands/
+feedback/
+token_usage/
+monitor-data/
+commands/
 *.log
+
+# Night 환경변수
+.env.night
 
 # AWS
 .aws/

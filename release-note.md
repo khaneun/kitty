@@ -2,6 +2,61 @@
 
 ---
 
+## v2.0.0 — 2026-04-03
+
+### 🌙 Night Mode — 미국주식 자동 매매 시스템
+
+한국주식(kitty-trader)과 완전히 독립된 미국주식 자동 매매 시스템 추가.
+동일한 7-에이전트 아키텍처를 미국 시장에 맞게 재설계. 코드·데이터·환경변수 완전 분리.
+
+**`kitty_night/` 패키지 신규 생성** (26개 파일)
+
+- `agents/` — 7개 Night 에이전트 (NightTendencyAgent ~ NightSellExecutorAgent)
+  - NightBaseAgent 기반, kitty와 import 공유 없음
+  - 영어 프롬프트, USD 기반, 미국 시장 특화 파라미터
+  - 익절 3~30% / 손절 -2~-15% / 분할 기준 10주 / 사이클 15분
+- `broker/kis_overseas.py` — KIS 해외주식 API (시세·잔고·주문·취소)
+  - 1.2초 주문 스로틀, 0.5초 시세 스로틀
+  - USD float 가격 처리 (한국주식 KRW int과 다름)
+- `market_calendar.py` — NYSE 거래일 캘린더 + DST 자동 대응
+  - MarketPhase: CLOSED → WAITING → PRE_MARKET → MARKET → POST_MARKET
+- `config.py` — NightSettings (Pydantic), `NIGHT_` prefix 환경변수
+- `main.py` — MarketPhase 기반 메인 루프
+  - PRE_MARKET: 분석만 실행 (주문 스킵)
+  - MARKET: 전체 매매 사이클 (매도 우선 → 매수)
+  - POST_MARKET: 성과 평가 + 성향 자동 조정
+  - 바로미터: SPY, QQQ, AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA, JPM
+- `evaluator/performance.py` — NightPerformanceEvaluator
+- `report.py` — NightDailyReport (night-reports/ 저장, 🌙 텔레그램 요약)
+- `telegram/bot.py` — NightTelegramReporter (메시지 전용, polling 없음)
+
+**`monitor/app.py` 대시보드 통합**
+
+- GNB에 🐱 Kitty ↔ 🌙 Night 뷰 전환 버튼 추가
+- Night 전용 API 4개: `/api/night/portfolio`, `/api/night/tendency`, `/api/night/agent-scores`, `/api/night/token-usage`
+- Night 탭: 성향 카드 + USD 포트폴리오 테이블 + 에이전트 점수 그리드/히트맵
+- Night 로그 감시 (`kitty-night_*.log` 패턴)
+
+**Docker 인프라**
+
+- `Dockerfile.night` 신규 — python:3.11-slim, kitty_night/ 패키지 빌드
+- `docker-compose.yml` — 3개 서비스 (kitty + kitty-night + monitor)
+- `start.sh` — Night 컨테이너 빌드/실행 + `.env.night` 자동 생성/삭제
+- `requirements.night.txt` 신규 — exchange-calendars, pydantic 등
+
+**AWS 인프라 변경**
+
+- EC2 24/7 상시 가동으로 전환 (기존 EventBridge 시작/중지 스케줄 비활성화)
+- Secrets Manager `kitty/prod`에 Night 키 추가 (NIGHT_KIS_*, NIGHT_AI_* 등)
+
+**`deployments.md` 업데이트**
+
+- EventBridge 비활성화 절차 + 운영 시간표 추가
+- kitty-night-trader 배포 절차 (섹션 10)
+- Secrets Manager Night 키 목록 (섹션 11)
+
+---
+
 ## v1.9.0 — 2026-04-03
 
 ### 모니터 대시보드 UX 개선

@@ -157,18 +157,77 @@ docker image prune -af
 
 ---
 
-## 9. EventBridge 스케줄 (자동 켜기/끄기)
+## 9. EventBridge 스케줄 (변경됨)
 
-| 동작 | 시각 (KST) | 요일 |
-|------|-----------|------|
-| EC2 시작 | 08:40 | 월~금 |
-| EC2 중지 | 15:40 | 월~금 |
+> **v2.0 변경**: Night mode 도입으로 EC2는 24/7 상시 가동합니다.
+> 기존 EventBridge 스케줄(08:40 시작 / 15:40 중지)은 **비활성화** 또는 **삭제**해야 합니다.
 
-EC2 시작 시 `kitty.service` (start.sh) 가 자동 실행되어 최신 코드를 배포함.
+### EventBridge 규칙 비활성화 절차
+
+```bash
+# AWS Console에서:
+# EventBridge → Rules → kitty-ec2-start / kitty-ec2-stop → Disable 또는 Delete
+
+# 또는 CLI로:
+aws events disable-rule --name kitty-ec2-start --region ap-northeast-2
+aws events disable-rule --name kitty-ec2-stop --region ap-northeast-2
+```
+
+### 운영 시간표
+
+| 서비스 | 동작 시간 (KST) | 비고 |
+|--------|----------------|------|
+| kitty-trader | 08:50~15:30 | 한국 주식 정규장 (자동 대기) |
+| kitty-night-trader | 21:00~06:00 | 미국 주식 (MarketPhase 자동 판별) |
+| kitty-monitor | 24/7 | 대시보드 항시 접근 가능 |
+
+3개 컨테이너 모두 `restart: unless-stopped`로 EC2 재시작 시 자동 복구됨.
 
 ---
 
-## 10. 주의사항
+## 10. kitty-night-trader 재배포
+
+kitty_night/ 하위 Python 코드 변경 시.
+
+```bash
+# EC2 SSH 접속 후
+cd /home/ec2-user/kitty
+
+# 이미지 재빌드
+docker build -t kitty-night-trader -f Dockerfile.night .
+
+# 컨테이너 교체
+docker stop kitty-night-trader && docker rm kitty-night-trader
+
+# Secrets에서 Night 환경변수 추출 (start.sh 참조)
+# 또는 전체 재시작:
+bash start.sh
+```
+
+> Night mode 단독 재시작 시 `.env.night` 파일이 필요함. `start.sh`로 전체 재시작하면 자동 생성/삭제됨.
+
+---
+
+## 11. Secrets Manager Night 키 추가
+
+Night mode용 시크릿을 `kitty/prod`에 추가:
+
+```
+NIGHT_AI_PROVIDER         (기본: openai)
+NIGHT_AI_MODEL            (기본: gpt-4o)
+NIGHT_KIS_APP_KEY         (해외 실전)
+NIGHT_KIS_APP_SECRET
+NIGHT_KIS_ACCOUNT_NUMBER
+NIGHT_KIS_PAPER_APP_KEY   (해외 모의)
+NIGHT_KIS_PAPER_APP_SECRET
+NIGHT_KIS_PAPER_ACCOUNT_NUMBER
+```
+
+> API 키(OPENAI/ANTHROPIC)와 Telegram은 kitty와 공유되므로 별도 추가 불필요.
+
+---
+
+## 12. 주의사항
 
 - **pochaco 서비스 혼재 금지** — kitty EC2에 pochaco 관련 서비스/디렉토리가 설치되면 포트 8080 충돌 발생. 확인: `ls /opt/` 및 `systemctl list-units | grep pochaco`
 - **포트 8080 독점** — kitty-monitor 외 다른 프로세스가 8080을 쓰는 경우 `ss -tlnp | grep 8080` 으로 확인

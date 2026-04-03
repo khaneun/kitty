@@ -18,6 +18,26 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  kitty-night:
+    build:
+      context: .
+      dockerfile: Dockerfile.night
+    container_name: kitty-night-trader
+    restart: unless-stopped
+    env_file:
+      - .env.night
+    volumes:
+      - ./night-logs:/app/night-logs
+      - ./night-feedback:/app/night-feedback
+      - ./night-token_usage:/app/night-token_usage
+      - ./night-reports:/app/night-reports
+      - ./night-commands:/app/night-commands
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   monitor:
     build: ./monitor
     container_name: kitty-monitor
@@ -30,6 +50,9 @@ services:
       - ./token_usage:/token_usage:ro # 토큰 사용량 읽기 전용
       - ./commands:/commands          # 모드 전환 등 kitty 명령 채널
       - ./monitor-data:/data          # SQLite DB 영속 저장
+      - ./night-logs:/night-logs:ro               # night 로그 읽기 전용
+      - ./night-feedback:/night-feedback:ro       # night 피드백 읽기 전용
+      - ./night-token_usage:/night-token_usage:ro # night 토큰 사용량 읽기 전용
     environment:
       - MONITOR_PASSWORD=${MONITOR_PASSWORD:-kitty}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}

@@ -68,6 +68,59 @@ _TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' /home/ec2-user/kitty/.env | cut -d= -f2-
 _TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 _MON_PW=$(grep '^MONITOR_PASSWORD=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 
+echo "[4.6/5] kitty-night-trader 빌드 및 실행 중..."
+docker stop kitty-night-trader 2>/dev/null || true
+docker rm kitty-night-trader 2>/dev/null || true
+
+docker build -t kitty-night-trader -f Dockerfile.night .
+
+mkdir -p /home/ec2-user/kitty/night-logs
+mkdir -p /home/ec2-user/kitty/night-feedback
+mkdir -p /home/ec2-user/kitty/night-token_usage
+mkdir -p /home/ec2-user/kitty/night-reports
+mkdir -p /home/ec2-user/kitty/night-commands
+
+# Night 환경변수 파일 생성 (NIGHT_ prefix 시크릿 + 공유 Telegram 토큰)
+_NIGHT_AI_PROVIDER=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_AI_PROVIDER','openai'))" "$SECRET")
+_NIGHT_AI_MODEL=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_AI_MODEL','gpt-4o'))" "$SECRET")
+_NIGHT_KIS_APP_KEY=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_APP_KEY',''))" "$SECRET")
+_NIGHT_KIS_APP_SECRET=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_APP_SECRET',''))" "$SECRET")
+_NIGHT_KIS_ACCOUNT=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_ACCOUNT',''))" "$SECRET")
+_NIGHT_OPENAI_API_KEY=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_OPENAI_API_KEY', d.get('OPENAI_API_KEY','')))" "$SECRET")
+_NIGHT_ANTHROPIC_API_KEY=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_ANTHROPIC_API_KEY', d.get('ANTHROPIC_API_KEY','')))" "$SECRET")
+
+_NIGHT_KIS_PAPER_KEY=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_PAPER_APP_KEY',''))" "$SECRET")
+_NIGHT_KIS_PAPER_SECRET=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_PAPER_APP_SECRET',''))" "$SECRET")
+_NIGHT_KIS_PAPER_ACCOUNT=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_PAPER_ACCOUNT_NUMBER',''))" "$SECRET")
+
+cat > /home/ec2-user/kitty/.env.night << NIGHTEOF
+NIGHT_TRADING_MODE=paper
+NIGHT_AI_PROVIDER=${_NIGHT_AI_PROVIDER}
+NIGHT_AI_MODEL=${_NIGHT_AI_MODEL}
+NIGHT_KIS_APP_KEY=${_NIGHT_KIS_APP_KEY}
+NIGHT_KIS_APP_SECRET=${_NIGHT_KIS_APP_SECRET}
+NIGHT_KIS_ACCOUNT_NUMBER=${_NIGHT_KIS_ACCOUNT}
+NIGHT_KIS_PAPER_APP_KEY=${_NIGHT_KIS_PAPER_KEY}
+NIGHT_KIS_PAPER_APP_SECRET=${_NIGHT_KIS_PAPER_SECRET}
+NIGHT_KIS_PAPER_ACCOUNT_NUMBER=${_NIGHT_KIS_PAPER_ACCOUNT}
+OPENAI_API_KEY=${_NIGHT_OPENAI_API_KEY}
+ANTHROPIC_API_KEY=${_NIGHT_ANTHROPIC_API_KEY}
+TELEGRAM_BOT_TOKEN=${_TG_TOKEN}
+TELEGRAM_CHAT_ID=${_TG_CHAT}
+NIGHTEOF
+
+docker run -d \
+  --name kitty-night-trader \
+  --restart unless-stopped \
+  --env-file /home/ec2-user/kitty/.env.night \
+  -v /home/ec2-user/kitty/night-logs:/app/night-logs \
+  -v /home/ec2-user/kitty/night-feedback:/app/night-feedback \
+  -v /home/ec2-user/kitty/night-token_usage:/app/night-token_usage \
+  -v /home/ec2-user/kitty/night-reports:/app/night-reports \
+  -v /home/ec2-user/kitty/night-commands:/app/night-commands \
+  kitty-night-trader
+
+# 모니터 실행 (night 볼륨 마운트 포함)
 docker run -d \
   --name kitty-monitor \
   --restart unless-stopped \
@@ -76,6 +129,9 @@ docker run -d \
   -v /home/ec2-user/kitty/token_usage:/token_usage:ro \
   -v /home/ec2-user/kitty/commands:/commands \
   -v /home/ec2-user/kitty/monitor-data:/data \
+  -v /home/ec2-user/kitty/night-logs:/night-logs:ro \
+  -v /home/ec2-user/kitty/night-feedback:/night-feedback:ro \
+  -v /home/ec2-user/kitty/night-token_usage:/night-token_usage:ro \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \
   -e MONITOR_PASSWORD="$_MON_PW" \
@@ -84,6 +140,7 @@ docker run -d \
 
 echo "[5/5] 시크릿 파일 삭제 중..."
 rm -f /home/ec2-user/kitty/.env
+rm -f /home/ec2-user/kitty/.env.night
 
 echo "완료! 컨테이너 상태:"
 docker ps

@@ -47,6 +47,16 @@ BURST_THRESH  = 3
 
 AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가"]
 
+# ── Night 모드 환경변수 ──────────────────────────────────────────────────────
+NIGHT_LOG_DIR     = Path(os.getenv("NIGHT_LOG_DIR",     "/night-logs"))
+NIGHT_FEEDBACK_DIR = Path(os.getenv("NIGHT_FEEDBACK_DIR", "/night-feedback"))
+NIGHT_TOKEN_DIR   = Path(os.getenv("NIGHT_TOKEN_DIR",    "/night-token_usage"))
+NIGHT_PORTFOLIO_SNAPSHOT = NIGHT_LOG_DIR / "night_portfolio_snapshot.json"
+NIGHT_AGENT_CONTEXT      = NIGHT_LOG_DIR / "night_agent_context.json"
+
+NIGHT_AGENTS = ["NightSectorAnalyst", "NightStockPicker", "NightStockEvaluator",
+                "NightAssetManager", "NightBuyExecutor", "NightSellExecutor"]
+
 # 모델별 비용 (USD / 1M 토큰)
 _COST: dict[str, tuple[float, float]] = {
     "gpt-4o":               (2.50,  10.00),
@@ -223,6 +233,8 @@ async def _watcher() -> None:
     conn = _db()
     for path in sorted(LOG_DIR.glob("kitty_*.log")):
         scan_file(path, conn)
+    for path in sorted(NIGHT_LOG_DIR.glob("kitty-night_*.log")):
+        scan_file(path, conn)
     cleanup_old(conn)
     conn.close()
     while True:
@@ -230,6 +242,8 @@ async def _watcher() -> None:
         conn = _db()
         new: list[dict] = []
         for path in sorted(LOG_DIR.glob("kitty_*.log")):
+            new.extend(scan_file(path, conn))
+        for path in sorted(NIGHT_LOG_DIR.glob("kitty-night_*.log")):
             new.extend(scan_file(path, conn))
         if _now().hour == 0 and _now().minute < 1:
             cleanup_old(conn)
@@ -546,6 +560,135 @@ def api_token_usage(req: Request):
     }
 
 
+# ── Night 모드 API 엔드포인트 ────────────────────────────────────────────────
+
+@app.get("/api/night/portfolio")
+def api_night_portfolio(req: Request):
+    """night-logs/night_portfolio_snapshot.json 에서 최신 Night 포트폴리오 반환"""
+    _auth(req)
+    if not NIGHT_PORTFOLIO_SNAPSHOT.exists():
+        return {"ts": None, "trading_mode": None, "holdings": [],
+                "available_cash": 0, "total_eval": 0, "total_pnl": 0,
+                "currency": "USD"}
+    try:
+        data = json.loads(NIGHT_PORTFOLIO_SNAPSHOT.read_text(encoding="utf-8"))
+        data.setdefault("currency", "USD")
+        return data
+    except Exception:
+        return {"ts": None, "trading_mode": None, "holdings": [],
+                "available_cash": 0, "total_eval": 0, "total_pnl": 0,
+                "currency": "USD"}
+
+
+@app.get("/api/night/tendency")
+def api_night_tendency(req: Request):
+    """night-logs/night_agent_context.json 에서 NightTendency 현재 성향 반환"""
+    _auth(req)
+    if not NIGHT_AGENT_CONTEXT.exists():
+        return {"profile_name": None}
+    try:
+        ctx = json.loads(NIGHT_AGENT_CONTEXT.read_text(encoding="utf-8"))
+        entry = ctx.get("NightTendency", {})
+        output = entry.get("output", {})
+        return {"ts": entry.get("ts"), **output}
+    except Exception:
+        return {"profile_name": None}
+
+
+@app.get("/api/night/agent-scores")
+def api_night_agent_scores(req: Request):
+    """night-feedback/*.json 파일에서 Night 에이전트별 일일 평가 점수 반환 (최근 14일)"""
+    _auth(req)
+    result: dict[str, list] = {}
+    for agent in NIGHT_AGENTS:
+        safe = agent.replace("/", "_").replace(" ", "_")
+        path = NIGHT_FEEDBACK_DIR / f"{safe}.json"
+        if path.exists():
+            try:
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                sorted_entries = sorted(entries, key=lambda x: x.get("date", ""))[-14:]
+                result[agent] = [
+                    {
+                        "date":        e.get("date", ""),
+                        "score":       e.get("score", 0),
+                        "summary":     e.get("summary", ""),
+                        "improvement": e.get("improvement", ""),
+                    }
+                    for e in sorted_entries
+                ]
+            except Exception:
+                result[agent] = []
+        else:
+            result[agent] = []
+    return result
+
+
+@app.get("/api/night/token-usage")
+def api_night_token_usage(req: Request):
+    """night-token_usage/YYYY-MM-DD.json 파일에서 최근 14일치 Night 토큰 사용량 반환"""
+    _auth(req)
+    today = _now().strftime("%Y-%m-%d")
+    dates = [(_now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+
+    daily: dict[str, dict] = {}
+    by_agent: dict[str, dict] = {}
+    today_summary: dict = {"in": 0, "out": 0, "cost": 0.0, "by_agent": {}}
+
+    for date in dates:
+        path = NIGHT_TOKEN_DIR / f"{date}.json"
+        if not path.exists():
+            daily[date] = {"in": 0, "out": 0, "cost": 0.0}
+            continue
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            daily[date] = {"in": 0, "out": 0, "cost": 0.0}
+            continue
+
+        d_in = d_out = 0
+        d_cost = 0.0
+        for e in entries:
+            in_t  = int(e.get("input_tokens",  0))
+            out_t = int(e.get("output_tokens", 0))
+            model = e.get("model", "")
+            cost  = _cost_usd(model, in_t, out_t)
+            agent = e.get("agent", "unknown")
+
+            d_in   += in_t
+            d_out  += out_t
+            d_cost += cost
+
+            if agent not in by_agent:
+                by_agent[agent] = {"in": 0, "out": 0, "cost": 0.0}
+            by_agent[agent]["in"]   += in_t
+            by_agent[agent]["out"]  += out_t
+            by_agent[agent]["cost"] += cost
+
+            if date == today:
+                if agent not in today_summary["by_agent"]:
+                    today_summary["by_agent"][agent] = {"in": 0, "out": 0, "cost": 0.0}
+                today_summary["by_agent"][agent]["in"]   += in_t
+                today_summary["by_agent"][agent]["out"]  += out_t
+                today_summary["by_agent"][agent]["cost"] += cost
+
+        daily[date] = {"in": d_in, "out": d_out, "cost": round(d_cost, 4)}
+        if date == today:
+            today_summary["in"]   = d_in
+            today_summary["out"]  = d_out
+            today_summary["cost"] = round(d_cost, 4)
+
+    for v in by_agent.values():
+        v["cost"] = round(v["cost"], 4)
+
+    return {
+        "dates":         dates,
+        "daily":         daily,
+        "by_agent":      by_agent,
+        "today":         today_summary,
+        "today_date":    today,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(req: Request):
     _auth(req)
@@ -704,6 +847,11 @@ table.log tr:hover td{background:#161b22}
 .subtabs{display:flex;background:#0d1117;border-bottom:1px solid #21262d;position:sticky;top:83px;z-index:98;overflow-x:auto}
 .subtab{padding:7px 16px;font-size:11px;color:#484f58;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0;letter-spacing:.3px}
 .subtab.active{color:#c9d1d9;border-bottom-color:#58a6ff}
+/* GNB view switcher */
+.view-switch{display:flex;background:#21262d;border-radius:6px;overflow:hidden;border:1px solid #30363d}
+.view-btn{padding:4px 10px;font-size:11px;cursor:pointer;border:none;background:transparent;color:#8b949e;font-weight:600;transition:all .15s}
+.view-btn.active{background:#58a6ff;color:#fff}
+.view-btn:hover:not(.active){background:#30363d;color:#c9d1d9}
 /* FAB 채팅 버튼 */
 .fab{position:fixed;bottom:22px;right:18px;z-index:150;width:52px;height:52px;border-radius:50%;background:#238636;border:none;color:#fff;font-size:22px;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;transition:transform .15s,background .15s}
 .fab:hover{transform:scale(1.08);background:#2ea043}
@@ -739,6 +887,10 @@ body{padding-bottom:80px}
 <header>
   <div class="logo">🐱 Kitty Monitor</div>
   <div class="gnb">
+    <div class="view-switch">
+      <button class="view-btn active" id="view-kitty" onclick="switchView('kitty')">🐱 Kitty</button>
+      <button class="view-btn" id="view-night" onclick="switchView('night')">🌙 Night</button>
+    </div>
     <select id="gnb-mode" class="gnb-select" onchange="onModeChange(this.value)" title="매매 모드">
       <option value="paper">📄 paper</option>
       <option value="live">🔴 live</option>
@@ -867,6 +1019,52 @@ body{padding-bottom:80px}
 </div>
 </div>
 
+<!-- ══ Night Mode 성적표 ══ -->
+<div id="tab-night" class="tab-content">
+<div class="wrap">
+  <!-- Night 투자 성향 -->
+  <div id="night-tendency-card" class="tendency-card" style="display:none">
+    <div class="tendency-header">
+      <span id="nt-badge" class="tendency-badge">-</span>
+    </div>
+    <div class="tendency-dims" id="nt-dims">
+      <div class="td-dim"><span class="td-dim-name">Take Profit</span><span id="nt-tp-lv" class="td-dim-lv lv-2">L2</span><span id="nt-tp" class="td-dim-val">-</span><span id="nt-tp-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">Stop Loss</span><span id="nt-sl-lv" class="td-dim-lv lv-2">L2</span><span id="nt-sl" class="td-dim-val">-</span><span id="nt-sl-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">Cash</span><span id="nt-cash-lv" class="td-dim-lv lv-2">L2</span><span id="nt-cash" class="td-dim-val">-</span><span id="nt-cash-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">Weight</span><span id="nt-wt-lv" class="td-dim-lv lv-2">L2</span><span id="nt-wt" class="td-dim-val">-</span><span id="nt-wt-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">Entry</span><span id="nt-en-lv" class="td-dim-lv lv-2">L2</span><span id="nt-en" class="td-dim-val">-</span><span id="nt-en-sub" class="td-dim-sub">-</span></div>
+    </div>
+    <div class="td-report" id="nt-report" style="display:none">
+      <div class="td-report-title" id="nt-report-title"></div>
+      <div class="td-report-text">
+        <span id="nt-report-preview"></span><span id="nt-report-full" style="display:none"></span><button class="td-report-more" id="nt-report-more" onclick="toggleNightReport()">more</button>
+      </div>
+    </div>
+  </div>
+  <!-- Night 포트폴리오 -->
+  <div class="section">
+    <div class="sec-title">Night Portfolio (USD)</div>
+    <div class="cards" id="nt-summary-cards" style="margin-bottom:10px">
+      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">Total Value</div><div class="num blue" style="font-size:17px" id="nt-total-eval">-</div></div>
+      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">P&L</div><div class="num" style="font-size:17px" id="nt-total-pnl">-</div></div>
+      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">Cash</div><div class="num gray" style="font-size:17px" id="nt-cash-val">-</div></div>
+    </div>
+    <div class="pf-wrap">
+      <table class="pf">
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Price</th><th>P&L%</th><th>Value</th></tr></thead>
+        <tbody id="nt-pf-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+      </table>
+    </div>
+    <div style="font-size:10px;color:#484f58;margin-top:6px;text-align:right" id="nt-pf-ts"></div>
+  </div>
+  <div class="agent-grid" id="nt-agent-cards"></div>
+  <div class="section">
+    <div class="sec-title">Night Agent Score Heatmap</div>
+    <div class="heatmap-wrap"><table class="heatmap" id="nt-heatmap"></table></div>
+  </div>
+</div>
+</div>
+
 <!-- FAB 채팅 버튼 -->
 <button class="fab" id="fab-chat" onclick="openChat()" title="에이전트 채팅">💬</button>
 
@@ -913,6 +1111,28 @@ body{padding-bottom:80px}
 </div>
 
 <script>
+// ── View 전환 (kitty ↔ night) ────────────────────────────
+let _currentView = 'kitty';
+
+function switchView(view) {
+  _currentView = view;
+  document.getElementById('view-kitty').classList.toggle('active', view==='kitty');
+  document.getElementById('view-night').classList.toggle('active', view==='night');
+  // Logo update
+  document.querySelector('.logo').textContent = view==='kitty' ? '🐱 Kitty Monitor' : '🌙 Night Monitor';
+  if(view==='kitty') {
+    switchMain('agents');
+    document.querySelectorAll('.tabs .tab, #subtabs').forEach(el => el.style.display='');
+  } else {
+    // night view: hide kitty tabs, show night tab
+    ['errors','tokens','agents'].forEach(n => document.getElementById('tab-'+n).classList.remove('active'));
+    document.getElementById('tab-night').classList.add('active');
+    document.querySelectorAll('.tabs').forEach(el => el.style.display='none');
+    document.getElementById('subtabs').style.display='none';
+    loadNightTendency(); loadNightPortfolio(); loadNightAgentScores();
+  }
+}
+
 // ── 탭 전환 ─────────────────────────────────────────────
 let _adminTab = 'errors';
 
@@ -921,7 +1141,7 @@ function switchMain(name) {
   document.getElementById('main-tab-agents').classList.toggle('active', isAgents);
   document.getElementById('main-tab-admin').classList.toggle('active', !isAgents);
   document.getElementById('subtabs').style.display = isAgents ? 'none' : 'flex';
-  ['errors','tokens','agents'].forEach(n => {
+  ['errors','tokens','agents','night'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
   if(isAgents) {
@@ -939,6 +1159,7 @@ function switchAdmin(name) {
     document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
   document.getElementById('tab-agents').classList.remove('active');
+  document.getElementById('tab-night').classList.remove('active');
   if(name==='errors'){ loadStats(); loadErrors(); }
   if(name==='tokens') loadTokens();
 }
@@ -1396,20 +1617,139 @@ async function pollChatResponse(id, agent) {
   setTimeout(poll, 2000);
 }
 
+// ── Night Mode 데이터 로드 ───────────────────────────────
+const NLV_LABELS = {1:'Very Aggressive',2:'Aggressive',3:'Active',4:'Balanced',5:'Conservative',6:'Very Conservative'};
+function setNightDimCell(idPfx, lv, val) {
+  const lvEl = document.getElementById(idPfx+'-lv');
+  if(lvEl){ lvEl.textContent='L'+lv; lvEl.className='td-dim-lv lv-'+lv; }
+  const vEl = document.getElementById(idPfx);
+  if(vEl) vEl.textContent = val;
+  const sEl = document.getElementById(idPfx+'-sub');
+  if(sEl) sEl.textContent = NLV_LABELS[lv]||'-';
+}
+
+async function loadNightTendency() {
+  try {
+    const d = await fetch('/api/night/tendency').then(r=>r.json());
+    if(!d.profile_name) return;
+    document.getElementById('night-tendency-card').style.display = '';
+    const badge = document.getElementById('nt-badge');
+    badge.textContent = d.label || d.profile_name;
+    badge.className = 'tendency-badge t-' + d.profile_name;
+    const lv = d.levels || {};
+    setNightDimCell('nt-tp',   lv.take_profit||2, d.take_profit_pct!=null?'+'+d.take_profit_pct+'%':'-');
+    setNightDimCell('nt-sl',   lv.stop_loss  ||2, d.stop_loss_pct  !=null?d.stop_loss_pct+'%'      :'-');
+    setNightDimCell('nt-cash', lv.cash       ||2, d.cash_reserve_min!=null?Math.round(d.cash_reserve_min*100)+'%+':'-');
+    setNightDimCell('nt-wt',   lv.max_weight ||2, d.max_weight_pct !=null?'max '+d.max_weight_pct+'%':'-');
+    setNightDimCell('nt-en',   lv.entry      ||2, d.entry_threshold_pct!=null?'±'+d.entry_threshold_pct+'%':'-');
+    const rationale = d.rationale || '';
+    if(rationale) {
+      const m = (d.ts||'').match(/(\d{4})-(\d{2})-(\d{2})/);
+      const title = m ? `${m[2]}/${m[3]} Night Report` : 'Night Report';
+      const LIMIT = 40;
+      document.getElementById('nt-report-title').textContent = title;
+      document.getElementById('nt-report-preview').textContent = rationale.length > LIMIT ? rationale.slice(0,LIMIT)+'...' : rationale;
+      document.getElementById('nt-report-full').textContent = rationale;
+      document.getElementById('nt-report-full').style.display = 'none';
+      document.getElementById('nt-report-more').textContent = 'more';
+      document.getElementById('nt-report-more').style.display = rationale.length > LIMIT ? '' : 'none';
+      document.getElementById('nt-report').style.display = '';
+    }
+  } catch(e){ console.error('night-tendency',e); }
+}
+
+function toggleNightReport() {
+  const preview = document.getElementById('nt-report-preview');
+  const full = document.getElementById('nt-report-full');
+  const btn = document.getElementById('nt-report-more');
+  const expanded = full.style.display !== 'none';
+  preview.style.display = expanded ? '' : 'none';
+  full.style.display = expanded ? 'none' : '';
+  btn.textContent = expanded ? 'more' : 'less';
+}
+
+async function loadNightPortfolio() {
+  try {
+    const d = await fetch('/api/night/portfolio').then(r=>r.json());
+    const fmtUSD = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const pnlColor = n => n>=0?'#3fb950':'#f85149';
+
+    document.getElementById('nt-total-eval').textContent = d.total_eval ? fmtUSD(d.total_eval) : '-';
+    const pnlEl = document.getElementById('nt-total-pnl');
+    pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtUSD(d.total_pnl) : '-';
+    pnlEl.style.color = pnlColor(d.total_pnl||0);
+    document.getElementById('nt-cash-val').textContent = d.available_cash ? fmtUSD(d.available_cash) : '-';
+    document.getElementById('nt-pf-ts').textContent = d.ts ? 'as of '+d.ts : '';
+
+    const tbody = document.getElementById('nt-pf-tbody');
+    if(!d.holdings || !d.holdings.length){
+      tbody.innerHTML='<tr><td colspan="6" class="empty">No holdings</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.holdings.map(h=>{
+      const color = pnlColor(h.pnl_rate||h.pnl_rt||0);
+      const rate = h.pnl_rate||h.pnl_rt||0;
+      const arrow = rate>=0?'▲':'▼';
+      return `<tr>
+        <td><div class="pf-name">${esc(h.name||h.symbol)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
+        <td>${(h.quantity||h.qty||0).toLocaleString()}</td>
+        <td>${fmtUSD(h.avg_price||h.avg||0)}</td>
+        <td>${fmtUSD(h.current_price||h.current||0)}</td>
+        <td style="color:${color};font-weight:700">${arrow}${Math.abs(rate).toFixed(2)}%</td>
+        <td style="color:${color}">${fmtUSD(h.eval_amount||h.eval_amt||0)}</td>
+      </tr>`;
+    }).join('');
+  } catch(e){ console.error('night-portfolio',e); }
+}
+
+async function loadNightAgentScores() {
+  try {
+    const data = await fetch('/api/night/agent-scores').then(r=>r.json());
+    const agents = Object.keys(data);
+    if(!agents.length){ document.getElementById('nt-agent-cards').innerHTML='<div class="empty">No night agent data yet</div>'; return; }
+    const allDates = [...new Set(agents.flatMap(a=>data[a].map(e=>e.date)))].sort().slice(-7);
+
+    document.getElementById('nt-agent-cards').innerHTML = agents.map(agent=>{
+      const entries = data[agent];
+      const shortName = agent.replace('Night','');
+      if(!entries.length) return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:#484f58">-</div><div class="agent-date">No data</div></div>`;
+      const latest = entries[entries.length-1];
+      const color = scoreColor(latest.score);
+      const recent = entries.slice(-7);
+      const bars = recent.map(e=>`<div class="s-bar-row"><div class="s-bar-dt">${e.date.slice(5)}</div><div class="s-bar-track"><div class="s-bar-fill" style="width:${e.score}%;background:${scoreColor(e.score)}"></div></div><div class="s-bar-n">${e.score}</div></div>`).join('');
+      return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date}</div><div class="score-bars">${bars}</div></div>`;
+    }).join('');
+
+    const thead = `<thead><tr><th>Agent</th>${allDates.map(d=>`<th>${d.slice(5)}</th>`).join('')}</tr></thead>`;
+    const tbody = `<tbody>${agents.map(agent=>{
+      const scoreMap = Object.fromEntries(data[agent].map(e=>[e.date,e]));
+      const cells = allDates.map(d=>{
+        const e=scoreMap[d]; if(!e) return '<td class="s-none">-</td>';
+        return `<td class="${scoreBg(e.score)}" title="${esc(e.summary||'')}" style="cursor:pointer">${e.score}</td>`;
+      }).join('');
+      return `<tr><td>${agent.replace('Night','')}</td>${cells}</tr>`;
+    }).join('')}</tbody>`;
+    document.getElementById('nt-heatmap').innerHTML = thead + tbody;
+  } catch(e){ console.error('night-agent-scores',e); }
+}
+
 // ── 초기화 & 자동 갱신 ──────────────────────────────────
 // 기본 뷰: 성적표
 loadTendency();
 loadPortfolio();
 loadAgentScores();
 
-// 성적표 60초 자동 갱신
+// 60초 자동 갱신
 setInterval(()=>{
   if(document.getElementById('tab-agents').classList.contains('active')){
     loadPortfolio(); loadAgentScores();
   }
+  if(document.getElementById('tab-night').classList.contains('active')){
+    loadNightPortfolio(); loadNightAgentScores();
+  }
 }, 60000);
 
-// 관리 탭 30초 자동 갱신 (열려 있을 때만)
+// 관리 탭 30초 자동 갱신
 setInterval(()=>{
   if(document.getElementById('tab-errors').classList.contains('active')){ loadStats(); loadErrors(); }
   if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
