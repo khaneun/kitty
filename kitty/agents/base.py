@@ -1,7 +1,7 @@
 """에이전트 기반 클래스 - 멀티 AI provider 지원"""
 import json
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +26,14 @@ class BaseAgent(ABC):
     def _build_system_prompt(self) -> str:
         """base prompt + 성과 피드백 합산"""
         from kitty.feedback.store import get_feedback_prompt
-        feedback = get_feedback_prompt(self.name)
-        return self._base_prompt + feedback if feedback else self._base_prompt
+        try:
+            feedback = get_feedback_prompt(self.name)
+        except Exception as e:
+            logger.warning(f"[{self.name}] 피드백 로드 실패 (무시): {e}")
+            feedback = ""
+        combined = self._base_prompt + feedback if feedback else self._base_prompt
+        # null byte 및 제어 문자 제거 — OpenAI API 400 에러 방지
+        return combined.replace("\x00", "").replace("\r", "")
 
     def reload_feedback(self) -> None:
         """피드백 파일이 업데이트됐을 때 system_prompt 갱신"""
@@ -39,6 +45,11 @@ class BaseAgent(ABC):
             _TOKEN_DIR.mkdir(exist_ok=True)
             today = datetime.now().strftime("%Y-%m-%d")
             path = _TOKEN_DIR / f"{today}.json"
+            # 30일 초과 파일 정리
+            cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            for old in _TOKEN_DIR.glob("*.json"):
+                if old.stem < cutoff:
+                    old.unlink(missing_ok=True)
             entry = {
                 "ts":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "agent":         self.name,
@@ -90,14 +101,24 @@ class BaseAgent(ABC):
         return response.content[0].text if response.content else ""
 
     async def _think_openai(self) -> str:
-        from openai import AsyncOpenAI
+        from openai import AsyncOpenAI, BadRequestError
         client = AsyncOpenAI(api_key=settings.openai_api_key)
         messages = [{"role": "system", "content": self.system_prompt}] + self._conversation
-        response = await client.chat.completions.create(
-            model=self._model,
-            max_tokens=4096,
-            messages=messages,  # type: ignore[arg-type]
-        )
+        try:
+            response = await client.chat.completions.create(
+                model=self._model,
+                max_tokens=4096,
+                messages=messages,  # type: ignore[arg-type]
+            )
+        except BadRequestError as e:
+            # 400: JSON 파싱 실패 → 피드백 없이 base prompt만으로 재시도
+            logger.warning(f"[{self.name}] OpenAI 400 에러, base prompt로 재시도: {e}")
+            messages[0] = {"role": "system", "content": self._base_prompt}
+            response = await client.chat.completions.create(
+                model=self._model,
+                max_tokens=4096,
+                messages=messages,  # type: ignore[arg-type]
+            )
         if response.usage:
             self._record_tokens(response.usage.prompt_tokens, response.usage.completion_tokens)
         return response.choices[0].message.content or ""

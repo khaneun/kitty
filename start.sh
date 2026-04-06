@@ -37,6 +37,9 @@ docker rm kitty-trader 2>/dev/null || true
 
 docker build -t kitty-trader .
 
+# 빌드 후 미사용 이미지 레이어 정리 (디스크 누적 방지)
+docker image prune -f
+
 mkdir -p /home/ec2-user/kitty/feedback
 mkdir -p /home/ec2-user/kitty/logs
 
@@ -61,6 +64,7 @@ docker stop kitty-monitor 2>/dev/null || true
 docker rm kitty-monitor 2>/dev/null || true
 
 docker build -t kitty-monitor ./monitor
+docker image prune -f
 
 mkdir -p /home/ec2-user/kitty/monitor-data
 
@@ -74,6 +78,7 @@ docker stop kitty-night-trader 2>/dev/null || true
 docker rm kitty-night-trader 2>/dev/null || true
 
 docker build -t kitty-night-trader -f Dockerfile.night .
+docker image prune -f
 
 mkdir -p /home/ec2-user/kitty/night-logs
 mkdir -p /home/ec2-user/kitty/night-feedback
@@ -147,3 +152,9 @@ rm -f /home/ec2-user/kitty/.env.night
 
 echo "완료! 컨테이너 상태:"
 docker ps
+echo ""
+echo "디스크 사용량:"
+df -h /
+echo ""
+echo "Docker 이미지/컨테이너 용량:"
+docker system df

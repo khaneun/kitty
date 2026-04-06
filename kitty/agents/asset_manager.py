@@ -2,6 +2,8 @@
 import json
 from typing import Any
 
+from kitty.utils import logger
+
 from .base import BaseAgent
 
 SYSTEM_PROMPT = """당신은 자산운용 전문가입니다.
@@ -145,6 +147,102 @@ JSON 형식으로 응답해주세요."""
         try:
             start = response.find("{")
             end = response.rfind("}") + 1
-            return json.loads(response[start:end])
+            result = json.loads(response[start:end])
         except Exception:
             return {"final_orders": [], "cash_reserve_ratio": 0.3, "summary": response}
+
+        # ── 하드코딩 가드레일: AI 응답 사후 검증 ──
+        result["final_orders"] = self._validate_orders(
+            result.get("final_orders", []),
+            available_cash=available_cash,
+            total_asset_value=total_asset_value,
+            max_buy=max_buy,
+            max_position=max_position,
+            portfolio=portfolio,
+            quote_map={q["symbol"]: q for q in quotes},
+        )
+        return result
+
+    @staticmethod
+    def _validate_orders(
+        orders: list[dict],
+        available_cash: int,
+        total_asset_value: int,
+        max_buy: int,
+        max_position: int,
+        portfolio: list[dict],
+        quote_map: dict,
+    ) -> list[dict]:
+        """AI 주문에 대한 하드 리밋 검증 — 위반 주문 제거 또는 수량 조정"""
+        # 현재 보유 금액 맵
+        holding_value: dict[str, int] = {}
+        for p in portfolio:
+            sym = p.get("pdno", "")
+            qty = int(p.get("hldg_qty", 0))
+            avg = float(p.get("pchs_avg_pric", 0))
+            holding_value[sym] = int(qty * avg)
+
+        validated: list[dict] = []
+        remaining_cash = available_cash
+
+        # 매도 주문은 먼저 통과 (현금 회수)
+        for order in orders:
+            if order.get("action") in ("SELL", "PARTIAL_SELL"):
+                validated.append(order)
+                sym = order.get("symbol", "")
+                q = quote_map.get(sym, {})
+                price = q.get("current_price", 0)
+                remaining_cash += int(order.get("quantity", 0)) * price
+
+        # 매수 주문 검증
+        for order in orders:
+            if order.get("action") not in ("BUY", "BUY_MORE"):
+                continue
+
+            sym = order.get("symbol", "")
+            qty = int(order.get("quantity", 0))
+            q = quote_map.get(sym, {})
+            price = q.get("current_price", 0)
+            if price <= 0:
+                validated.append(order)
+                continue
+
+            order_amount = qty * price
+
+            # 1) 1회 최대 매수금액 초과 → 수량 축소
+            if order_amount > max_buy:
+                qty = max_buy // price
+                order_amount = qty * price
+                if qty <= 0:
+                    logger.warning(f"[가드레일] {sym} 1회 최대 매수금액 초과 — 주문 제거")
+                    continue
+                logger.info(f"[가드레일] {sym} 1회 매수한도 적용 → {qty}주로 축소")
+
+            # 2) 종목당 최대 보유금액 초과 → 수량 축소
+            current_value = holding_value.get(sym, 0)
+            if current_value + order_amount > max_position:
+                allowed = max_position - current_value
+                if allowed <= 0:
+                    logger.warning(f"[가드레일] {sym} 이미 최대 보유금액 도달 — 주문 제거")
+                    continue
+                qty = allowed // price
+                order_amount = qty * price
+                if qty <= 0:
+                    continue
+                logger.info(f"[가드레일] {sym} 포지션한도 적용 → {qty}주로 축소")
+
+            # 3) 가용현금 초과 → 수량 축소
+            if order_amount > remaining_cash:
+                qty = remaining_cash // price
+                order_amount = qty * price
+                if qty <= 0:
+                    logger.warning(f"[가드레일] 현금 부족으로 {sym} 매수 제거")
+                    continue
+                logger.info(f"[가드레일] {sym} 현금한도 적용 → {qty}주로 축소")
+
+            order["quantity"] = qty
+            remaining_cash -= order_amount
+            holding_value[sym] = current_value + order_amount
+            validated.append(order)
+
+        return validated

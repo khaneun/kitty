@@ -292,16 +292,27 @@ async def run_trading_cycle(
         reporter.mark_cycle_done()
         return
 
-    # 8. 매수/매도 실행
-    buy_result = await buy_executor.run({"final_orders": final_orders, "quotes": quotes})
+    # 8. 매도 먼저 실행 (잔고 확보) → 매수 실행
     sell_result = await sell_executor.run({
         "final_orders": final_orders,
         "portfolio": portfolio,
         "quotes": quotes,
     })
-
-    buy_results = buy_result.get("buy_results", [])
     sell_results = sell_result.get("sell_results", [])
+
+    # 매도 후 가용현금 재조회하여 매수 한도 검증
+    try:
+        refreshed_cash = await broker.get_available_cash()
+        logger.info(f"매도 후 가용현금: {refreshed_cash:,}원")
+    except Exception:
+        refreshed_cash = available_cash
+
+    buy_result = await buy_executor.run({
+        "final_orders": final_orders,
+        "quotes": quotes,
+        "available_cash": refreshed_cash,
+    })
+    buy_results = buy_result.get("buy_results", [])
     daily_report.record_executions(buy_results, sell_results)
     _save_agent_context("매수실행가", {"buy_results": buy_results})
     _save_agent_context("매도실행가", {"sell_results": sell_results})
@@ -502,10 +513,9 @@ async def main() -> None:
 
             # 8:50 이전 또는 15:30 이후에는 사이클 건너뜀 (모의/실전 공통)
             if not _is_pre_market_or_market():
-                logger.info("장 외 시간 - 대기 중")
+                logger.debug("장 외 시간 - 대기 중")
             elif not reporter.is_paused:
                 try:
-                    _last_cycle_time = time.monotonic()
                     await run_trading_cycle(
                         broker,
                         sector_analyst,
@@ -521,8 +531,10 @@ async def main() -> None:
                 except Exception as e:
                     logger.error(f"매매 사이클 오류: {e}")
                     await reporter.report_error(str(e))
+                finally:
+                    _last_cycle_time = time.monotonic()
             else:
-                logger.info("매매 일시정지 중...")
+                logger.debug("매매 일시정지 중...")
 
             # 마지막 사이클 실행 시각 기준 300초 대기 (즉시 실행 요청 시 타이머 리셋)
             elapsed = time.monotonic() - _last_cycle_time

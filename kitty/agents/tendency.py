@@ -4,11 +4,11 @@
 
   차원          L1 (공격적)           L6 (보수적)
   ─────────── ──────────────────── ──────────────────────
-  익절         +2%에 즉시 실현       +25% 될 때까지 보유
-  손절         -1.5% 즉시 차단       -13% 감내
+  익절         +3%에 즉시 실현       +25% 될 때까지 보유
+  손절         -2% 즉시 차단         -13% 감내
   현금         10% 유보              60% 유보
-  종목집중      최대 40% 집중         최대 10% (분산)
-  진입기준      +8% 추격매수도 가능    ±0.5% 이하만 진입
+  종목집중      최대 35% 집중         최대 10% (분산)
+  진입기준      +6% 추격매수도 가능    ±0.5% 이하만 진입
 
 장 마감 후 update_strategy()를 호출하면 AI가 성과를 분석해 내일 레벨을 결정합니다.
 결정된 레벨은 logs/tendency_state.json에 저장되어 재시작 시에도 유지됩니다.
@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from kitty.utils import logger
 
 from .base import BaseAgent
 
@@ -40,16 +42,16 @@ DIM_LABELS: dict[str, str] = {
 # ── 6단계 실제값 (L1 = 가장 공격적, L6 = 가장 보수적) ─────────────────────────
 
 LEVEL_VALUES: dict[str, dict[int, float]] = {
-    # 익절 시작 수익률 (%)
-    "take_profit": {1: 2.0, 2: 4.0, 3: 7.0, 4: 12.0, 5: 18.0, 6: 25.0},
-    # 손절 기준 손실률 (%) — 절댓값이 작을수록 빠른 손절
-    "stop_loss":   {1: -1.5, 2: -2.5, 3: -4.0, 4: -6.0, 5: -9.0, 6: -13.0},
+    # 익절 시작 수익률 (%) — 최소 손절의 1.5배 이상 확보 (유리한 손익비)
+    "take_profit": {1: 3.0, 2: 5.0, 3: 7.0, 4: 12.0, 5: 18.0, 6: 25.0},
+    # 손절 기준 손실률 (%) — L1 -2%로 완화 (너무 빠른 손절은 노이즈에 취약)
+    "stop_loss":   {1: -2.0, 2: -3.0, 3: -4.0, 4: -6.0, 5: -9.0, 6: -13.0},
     # 최소 현금 비중 (0~1)
     "cash":        {1: 0.10, 2: 0.18, 3: 0.25, 4: 0.35, 5: 0.48, 6: 0.60},
-    # 단일 종목 최대 비중 (%)
-    "max_weight":  {1: 40.0, 2: 30.0, 3: 22.0, 4: 17.0, 5: 13.0, 6: 10.0},
-    # 신규 진입 가능 당일 등락률 상한 (%) — 높을수록 추격매수 허용
-    "entry":       {1: 8.0, 2: 5.0, 3: 3.0, 4: 2.0, 5: 1.0, 6: 0.5},
+    # 단일 종목 최대 비중 (%) — L1 35%로 제한 (40%는 과도한 집중)
+    "max_weight":  {1: 35.0, 2: 28.0, 3: 22.0, 4: 17.0, 5: 13.0, 6: 10.0},
+    # 신규 진입 가능 당일 등락률 상한 (%) — L1 6%로 제한 (8% 추격매수는 위험)
+    "entry":       {1: 6.0, 2: 4.5, 3: 3.0, 4: 2.0, 5: 1.0, 6: 0.5},
 }
 
 LEVEL_LABEL: dict[int, str] = {
@@ -71,16 +73,16 @@ _INITIAL_LEVELS: dict[str, int] = {dim: 2 for dim in DIMS}
 PRESETS: dict[str, dict[str, int]] = {
     # 빠른 익절·손절, 집중 투자, 낮은 현금
     "aggressive": {
-        "take_profit": 2,  # +4.0%
-        "stop_loss":   2,  # -2.5%
+        "take_profit": 2,  # +5.0%
+        "stop_loss":   2,  # -3.0%  (손익비 1:1.67)
         "cash":        2,  # 18%
-        "max_weight":  2,  # 30%
-        "entry":       2,  # +5%
+        "max_weight":  2,  # 28%
+        "entry":       2,  # +4.5%
     },
     # 균형 잡힌 기준, 적절한 분산
     "balanced": {
         "take_profit": 4,  # +12.0%
-        "stop_loss":   4,  # -6.0%
+        "stop_loss":   4,  # -6.0%  (손익비 1:2.0)
         "cash":        4,  # 35%
         "max_weight":  4,  # 17%
         "entry":       3,  # +3%
@@ -88,7 +90,7 @@ PRESETS: dict[str, dict[str, int]] = {
     # 충분한 수익 대기, 높은 현금, 분산 투자
     "conservative": {
         "take_profit": 5,  # +18.0%
-        "stop_loss":   3,  # -4.0% (자본 보호 위해 중간 강도)
+        "stop_loss":   3,  # -4.0%  (손익비 1:4.5)
         "cash":        5,  # 48%
         "max_weight":  5,  # 13%
         "entry":       5,  # +1%
@@ -191,20 +193,20 @@ SYSTEM_PROMPT = """당신은 투자 전략 최고 책임자(CIO)입니다.
 ── 5개 차원 × 6단계 레벨 ──────────────────────────────
 
 ■ 익절 (take_profit): 수익 실현 속도
-  L1(+2%) L2(+4%) L3(+7%) L4(+12%) L5(+18%) L6(+25%)
+  L1(+3%) L2(+5%) L3(+7%) L4(+12%) L5(+18%) L6(+25%)
 
 ■ 손절 (stop_loss): 손실 차단 속도
-  L1(-1.5%) L2(-2.5%) L3(-4%) L4(-6%) L5(-9%) L6(-13%)
+  L1(-2%) L2(-3%) L3(-4%) L4(-6%) L5(-9%) L6(-13%)
   ※ L1이 가장 빠른 손절, L6이 가장 느린 손절
 
 ■ 현금 유보 (cash): 현금 보유 비중
   L1(10%) L2(18%) L3(25%) L4(35%) L5(48%) L6(60%)
 
 ■ 종목 집중 (max_weight): 단일 종목 최대 비중
-  L1(40%) L2(30%) L3(22%) L4(17%) L5(13%) L6(10%)
+  L1(35%) L2(28%) L3(22%) L4(17%) L5(13%) L6(10%)
 
 ■ 진입 기준 (entry): 신규 진입 가능 당일 등락률 상한
-  L1(8%) L2(5%) L3(3%) L4(2%) L5(1%) L6(0.5%)
+  L1(6%) L2(4.5%) L3(3%) L4(2%) L5(1%) L6(0.5%)
   ※ L1이 가장 공격적(추격매수 가능), L6이 가장 제한적
 
 ── 차원별 독립 조합 예시 ──────────────────────────────
@@ -283,7 +285,6 @@ class TendencyAgent(BaseAgent):
                 encoding="utf-8",
             )
         except Exception as e:
-            from kitty.utils import logger
             logger.warning(f"[투자성향관리자] 상태 저장 실패: {e}")
 
     # ── 공개 인터페이스 ────────────────────────────────────────────────────────
@@ -336,8 +337,6 @@ class TendencyAgent(BaseAgent):
         Returns:
             업데이트된 profile dict (변경 없으면 현재 profile 반환)
         """
-        from kitty.utils import logger
-
         if not eval_results:
             logger.info("[투자성향관리자] 평가 결과 없음 — 레벨 유지")
             return self.profile
@@ -473,7 +472,6 @@ class TendencyAgent(BaseAgent):
             return self.profile
 
         except Exception as e:
-            from kitty.utils import logger
             logger.error(f"[투자성향관리자] update_strategy 오류: {e}")
             return self.profile
 

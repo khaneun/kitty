@@ -182,13 +182,14 @@ class PerformanceEvaluator:
         avg_return = sum(buy_changes) / len(buy_changes) if buy_changes else None
         sell_acc = sell_correct / sell_total if sell_total > 0 else None
 
+        # 연속적 점수 산출 (기존 이산적 5단계 → 선형 보간)
         score = 50
         if avg_return is not None:
-            if avg_return > 2:     score = 90
-            elif avg_return > 0.5: score = 70
-            elif avg_return > 0:   score = 60
-            elif avg_return > -1:  score = 40
-            else:                  score = 20
+            # -3% 이하 → 10점, 0% → 50점, +3% 이상 → 95점 (선형)
+            score = max(10, min(95, round(50 + avg_return * 15)))
+        # 매도 정확도 보정 (±10점)
+        if sell_acc is not None:
+            score = max(10, min(95, score + round((sell_acc - 0.5) * 20)))
 
         return {
             "score": score,
@@ -263,12 +264,8 @@ class PerformanceEvaluator:
             return {}
 
         avg = sum(direction_scores) / len(direction_scores)
-        score = 50
-        if avg > 2:     score = 90
-        elif avg > 0.5: score = 70
-        elif avg >= 0:  score = 60
-        elif avg > -1:  score = 40
-        else:           score = 20
+        # 연속적 점수: -3% → 10점, 0% → 50점, +3% → 95점
+        score = max(10, min(95, round(50 + avg * 15)))
 
         return {
             "score": score,
@@ -318,11 +315,10 @@ class PerformanceEvaluator:
             }
 
         avg = sum(efficiencies) / len(efficiencies)
-        score = 50
-        if avg > 1:      score = 90
-        elif avg > 0:    score = 70
-        elif avg > -0.5: score = 50
-        else:            score = 30
+        # 연속적 점수: -1% → 30점, 0% → 60점, +1% → 90점
+        score = max(10, min(95, round(60 + avg * 30)))
+        # 실패 건수 감점 (-5점/건)
+        score = max(10, score - failed_count * 5)
 
         return {
             "score": score,
@@ -373,11 +369,9 @@ class PerformanceEvaluator:
             }
 
         avg = sum(efficiencies) / len(efficiencies)
-        score = 50
-        if avg > 0.5:    score = 90
-        elif avg > 0:    score = 70
-        elif avg > -0.5: score = 50
-        else:            score = 30
+        # 연속적 점수: -1% → 30점, 0% → 60점, +1% → 90점
+        score = max(10, min(95, round(60 + avg * 30)))
+        score = max(10, score - failed_count * 5)
 
         return {
             "score": score,

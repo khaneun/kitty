@@ -43,8 +43,11 @@ class KISBroker:
     def __init__(self) -> None:
         self._access_token: str | None = None
         self._token_expires_at: datetime = datetime.min
-        # 한국투자증권 모의투자 서버는 SSL 인증서 호스트명 불일치 이슈가 있어 verify=False 처리
-        self._client = httpx.AsyncClient(timeout=10.0, verify=False)
+        # 실전: SSL 검증 활성화 / 모의: 인증서 호스트명 불일치 이슈로 verify=False
+        self._client = httpx.AsyncClient(
+            timeout=10.0,
+            verify=settings.is_live,
+        )
 
     @property
     def _base_url(self) -> str:
@@ -87,12 +90,12 @@ class KISBroker:
 
     async def get_quote(self, symbol: str) -> StockQuote:
         """현재가 조회 (TR: FHKST01010100)
-        KIS API rate limit 대응: 500 응답 시 최대 3회 재시도 (1s, 2s 간격)
+        KIS API rate limit 대응: 429/500 응답 시 최대 4회 재시도 (지수 백오프)
         """
         last_exc: Exception = RuntimeError("get_quote 재시도 초과")
-        for attempt in range(3):
+        for attempt in range(4):
             if attempt > 0:
-                await asyncio.sleep(attempt)  # 1초, 2초 대기
+                await asyncio.sleep(min(attempt * 1.5, 5))  # 1.5s, 3s, 4.5s
             try:
                 headers = await self._headers("FHKST01010100")
                 resp = await self._client.get(
@@ -100,13 +103,13 @@ class KISBroker:
                     headers=headers,
                     params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol},
                 )
-                if resp.status_code == 500:
+                if resp.status_code in (429, 500):
                     last_exc = httpx.HTTPStatusError(
-                        f"500 Internal Server Error (attempt {attempt + 1})",
+                        f"{resp.status_code} (attempt {attempt + 1})",
                         request=resp.request,
                         response=resp,
                     )
-                    logger.warning(f"[KIS] {symbol} 주가 조회 500 — {attempt + 1}/3 재시도")
+                    logger.warning(f"[KIS] {symbol} 주가 조회 {resp.status_code} — {attempt + 1}/4 재시도")
                     continue
                 resp.raise_for_status()
                 output = resp.json()["output"]
@@ -186,7 +189,7 @@ class KISBroker:
         실전 TR: TTTC0802U
         모의 TR: VTTC0802U
         price=0 이면 시장가(ORD_DVSN=01), 그 외 지정가(ORD_DVSN=00)
-        KIS API rate limit 대응: 500 응답 시 최대 3회 재시도 (1s, 2s 간격)
+        KIS API rate limit 대응: 429/500 응답 시 최대 4회 재시도 (지수 백오프)
         """
         tr_id = "TTTC0802U" if settings.is_live else "VTTC0802U"
         ord_dvsn = "01" if price == 0 else "00"
@@ -202,9 +205,9 @@ class KISBroker:
         }
 
         last_exc: Exception = RuntimeError("buy 재시도 초과")
-        for attempt in range(3):
+        for attempt in range(4):
             if attempt > 0:
-                await asyncio.sleep(attempt)  # 1초, 2초 대기
+                await asyncio.sleep(min(attempt * 1.5, 5))
             try:
                 headers = await self._headers(tr_id)
                 resp = await self._client.post(
@@ -212,18 +215,18 @@ class KISBroker:
                     headers=headers,
                     json=body,
                 )
-                if resp.status_code == 500:
+                if resp.status_code in (429, 500):
                     last_exc = httpx.HTTPStatusError(
-                        f"500 Internal Server Error (attempt {attempt + 1})",
+                        f"{resp.status_code} (attempt {attempt + 1})",
                         request=resp.request,
                         response=resp,
                     )
-                    logger.warning(f"[KIS] 매수 주문 {_label} 500 — {attempt + 1}/3 재시도")
+                    logger.warning(f"[KIS] 매수 주문 {_label} {resp.status_code} — {attempt + 1}/4 재시도")
                     continue
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("rt_cd") != "0":
-                    raise RuntimeError(data.get("msg1", str(data)))
+                    raise RuntimeError(data.get("msg1") or data.get("msg", str(data)))
                 logger.info(f"매수 주문: {_label} {quantity}주 @ {price}원")
                 return OrderResult(
                     order_id=data["output"]["ODNO"],
@@ -246,7 +249,7 @@ class KISBroker:
         실전 TR: TTTC0801U
         모의 TR: VTTC0801U
         price=0 이면 시장가(ORD_DVSN=01), 그 외 지정가(ORD_DVSN=00)
-        KIS API rate limit 대응: 500 응답 시 최대 3회 재시도 (1s, 2s 간격)
+        KIS API rate limit 대응: 429/500 응답 시 최대 4회 재시도 (지수 백오프)
         """
         tr_id = "TTTC0801U" if settings.is_live else "VTTC0801U"
         ord_dvsn = "01" if price == 0 else "00"
@@ -262,9 +265,9 @@ class KISBroker:
         }
 
         last_exc: Exception = RuntimeError("sell 재시도 초과")
-        for attempt in range(3):
+        for attempt in range(4):
             if attempt > 0:
-                await asyncio.sleep(attempt)  # 1초, 2초 대기
+                await asyncio.sleep(min(attempt * 1.5, 5))
             try:
                 headers = await self._headers(tr_id)
                 resp = await self._client.post(
@@ -272,18 +275,18 @@ class KISBroker:
                     headers=headers,
                     json=body,
                 )
-                if resp.status_code == 500:
+                if resp.status_code in (429, 500):
                     last_exc = httpx.HTTPStatusError(
-                        f"500 Internal Server Error (attempt {attempt + 1})",
+                        f"{resp.status_code} (attempt {attempt + 1})",
                         request=resp.request,
                         response=resp,
                     )
-                    logger.warning(f"[KIS] 매도 주문 {_label} 500 — {attempt + 1}/3 재시도")
+                    logger.warning(f"[KIS] 매도 주문 {_label} {resp.status_code} — {attempt + 1}/4 재시도")
                     continue
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("rt_cd") != "0":
-                    raise RuntimeError(data.get("msg1", str(data)))
+                    raise RuntimeError(data.get("msg1") or data.get("msg", str(data)))
                 logger.info(f"매도 주문: {_label} {quantity}주 @ {price}원")
                 return OrderResult(
                     order_id=data["output"]["ODNO"],

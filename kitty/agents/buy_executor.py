@@ -8,6 +8,9 @@ from kitty.utils import logger
 
 from .base import BaseAgent
 
+# 재시도해도 해결되지 않는 에러 키워드 — 즉시 포기
+_NON_RETRYABLE = ("장종료", "매매불가", "거래정지", "상장폐지", "주문불가")
+
 SYSTEM_PROMPT = """당신은 주식 매수 전문가입니다.
 
 역할:
@@ -42,20 +45,21 @@ class BuyExecutorAgent(BaseAgent):
         SINGLE: direct order
 
         For each chunk:
-        1. Place limit order at current_price (or price if specified)
-        2. Wait 8 seconds
+        1. Place limit order at current_price + 0.3% (체결률 향상)
+        2. Wait 5 seconds
         3. Check fill via get_order_status()
-        4. If not filled: cancel, wait 2s, retry with market order
+        4. If not filled: cancel, wait 1s, retry with market order
         5. Max 3 total attempts
         """
         chunk_results: list[dict[str, Any]] = []
 
-        # Determine order price (use current quote if price is 0)
+        # Determine order price — 체결 확률 높이기 위해 현재가 대비 +0.3% 설정
         order_price = price
         if order_price == 0:
             try:
                 quote = await self.broker.get_quote(symbol)
-                order_price = quote.current_price
+                # 매수 시 약간 높은 가격으로 지정가 → 체결률 향상
+                order_price = round(quote.current_price * 1.003)
             except Exception as e:
                 _slabel = f"{name}({symbol})" if name else symbol
                 logger.warning(f"[매수실행가] {_slabel} 현재가 조회 실패, 시장가 사용: {e}")
@@ -80,13 +84,13 @@ class BuyExecutorAgent(BaseAgent):
             for attempt in range(3):
                 try:
                     if attempt == 0 and order_price > 0:
-                        # First attempt: limit order at current price
+                        # First attempt: limit order at slightly above current price
                         logger.info(f"[매수실행가] {chunk_label} 지정가 매수 시도 @ {order_price:,}원")
                         order: OrderResult = await self.broker.buy(symbol, chunk_qty, order_price, name)
                         order_id = order.order_id
 
-                        # Wait 8 seconds for fill
-                        await asyncio.sleep(8)
+                        # Wait 5 seconds for fill (8초→5초: 모멘텀 손실 방지)
+                        await asyncio.sleep(5)
 
                         # Check fill status
                         try:
@@ -107,18 +111,33 @@ class BuyExecutorAgent(BaseAgent):
                                 })
                                 success = True
                                 break
-                            else:
-                                # Partially filled or not filled — cancel remaining
+                            elif filled_qty > 0:
+                                # Partially filled — record filled portion, retry remainder
                                 logger.info(
-                                    f"[매수실행가] {chunk_label} 미체결({remaining_qty}주 잔여) — 취소 후 시장가 재시도"
+                                    f"[매수실행가] {chunk_label} 부분 체결({filled_qty}주) — 잔여 {remaining_qty}주 취소 후 시장가"
+                                )
+                                chunk_results.append({
+                                    "symbol": symbol,
+                                    "order_id": order_id,
+                                    "status": "FILLED",
+                                    "quantity": filled_qty,
+                                    "price": order_price,
+                                    "chunk": i + 1,
+                                })
+                                await self.broker.cancel_order(order_id, symbol, remaining_qty)
+                                await asyncio.sleep(1)
+                                chunk_qty = remaining_qty
+                                order_price = 0
+                            else:
+                                # Not filled — cancel and retry market
+                                logger.info(
+                                    f"[매수실행가] {chunk_label} 미체결 — 취소 후 시장가 재시도"
                                 )
                                 await self.broker.cancel_order(order_id, symbol, remaining_qty)
-                                await asyncio.sleep(2)
-                                # Fall through to market order on next attempt
+                                await asyncio.sleep(1)
                                 order_price = 0
                         except Exception as e:
                             logger.warning(f"[매수실행가] {chunk_label} 체결 조회 실패: {e}")
-                            # Fall through to market order
                             order_price = 0
                     else:
                         # Fallback: market order
@@ -137,15 +156,21 @@ class BuyExecutorAgent(BaseAgent):
                         break
 
                 except Exception as e:
-                    logger.error(f"[매수실행가] {chunk_label} attempt {attempt + 1} 실패: {e}")
-                    if attempt == 2:
+                    err_msg = str(e)
+                    non_retryable = any(k in err_msg for k in _NON_RETRYABLE)
+                    if non_retryable:
+                        logger.warning(f"[매수실행가] {chunk_label} 재시도 불가 에러 — 즉시 중단: {err_msg}")
+                    else:
+                        logger.error(f"[매수실행가] {chunk_label} attempt {attempt + 1} 실패: {err_msg or '(빈 응답)'}")
+                    if attempt == 2 or non_retryable:
                         chunk_results.append({
                             "symbol": symbol,
                             "status": "FAILED",
                             "quantity": chunk_qty,
-                            "reason": str(e),
+                            "reason": err_msg or "KIS 빈 응답",
                             "chunk": i + 1,
                         })
+                        break
 
             if not success and not any(
                 r.get("chunk") == i + 1 for r in chunk_results
@@ -175,6 +200,7 @@ class BuyExecutorAgent(BaseAgent):
         all_chunk_results: list[dict[str, Any]] = []
 
         quote_map = {q["symbol"]: q for q in context.get("quotes", [])}
+        remaining_cash = context.get("available_cash", float("inf"))
 
         for order in buy_orders:
             symbol = order["symbol"]
@@ -196,6 +222,25 @@ class BuyExecutorAgent(BaseAgent):
                     "quantity": quantity,
                 })
                 continue
+
+            # 가용현금 사전 체크 — 주문 예상 금액이 잔여 현금 초과 시 스킵
+            est_price = quote.get("current_price", 0) if quote else 0
+            if est_price > 0 and remaining_cash != float("inf"):
+                est_amount = est_price * quantity
+                if est_amount > remaining_cash:
+                    # 수량 축소 시도
+                    quantity = int(remaining_cash // est_price)
+                    if quantity <= 0:
+                        logger.warning(f"[매수실행가] {_label} 가용현금 부족 — 매수 스킵")
+                        all_chunk_results.append({
+                            "symbol": symbol,
+                            "status": "SKIPPED",
+                            "reason": "가용현금 부족",
+                            "quantity": 0,
+                        })
+                        continue
+                    logger.info(f"[매수실행가] {_label} 현금한도 적용 → {quantity}주로 축소")
+                remaining_cash -= est_price * quantity
 
             # Use SPLIT if quantity > 5 or explicitly requested
             effective_order_type = "SPLIT" if (quantity > 5 or order_type == "SPLIT") else "SINGLE"

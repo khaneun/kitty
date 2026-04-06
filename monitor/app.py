@@ -1,6 +1,6 @@
 """Kitty 모니터 — FastAPI + SQLite + 4탭 모바일 대시보드
 
-수집 대상: /logs/kitty_YYYY-MM-DD.log 파일의 ERROR / WARNING / CRITICAL 라인
+수집 대상: /logs/kitty_errors_YYYY-MM-DD.log 파일 (ERROR / WARNING / CRITICAL 전용)
 저장소   : /data/monitor.db (SQLite, 30일 보관)
 대시보드 : http://EC2-IP:8080  (HTTP Basic Auth)
 텔레그램 : CRITICAL 즉시 알림 + 5분 내 ERROR 3건 이상 버스트 알림 (선택)
@@ -1183,8 +1183,11 @@ function closeChat() {
   document.getElementById('chat-popup').classList.remove('open');
 }
 
-const _kst = new Date(Date.now() + 9*60*60*1000);
-const today = _kst.toISOString().slice(0,10);
+// KST 유틸리티 (Asia/Seoul, UTC+9, DST 없음)
+const _toKST = d => new Date(d).toLocaleString('sv-SE', {timeZone:'Asia/Seoul'});   // "YYYY-MM-DD HH:MM:SS"
+const _kstDate = () => _toKST(new Date()).slice(0,10);
+const _kstTime = () => new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', timeZone:'Asia/Seoul'});
+const today = _kstDate();
 document.getElementById('f-date').value = today;
 
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1204,7 +1207,7 @@ async function loadHealth() {
     document.getElementById('h-warn-today').textContent = d.warn_today;
     document.getElementById('h-err-1h').textContent     = d.err_1h;
     document.getElementById('h-last-log').textContent   = d.last_log_ts || '로그 없음';
-    if(d.last_log_ts) document.getElementById('upd-txt').textContent = '갱신 '+d.last_log_ts.slice(5,16);
+    if(d.last_log_ts) document.getElementById('upd-txt').textContent = '갱신 '+d.last_log_ts.slice(5,16)+' KST';
 
     const badge = document.getElementById('status-badge');
     const labels = {ok:'✅ 정상 운영 중', warning:'⚠️ 경고 — 에러 증가 중', critical:'🔴 위험 — 에러 다수 발생'};
@@ -1237,7 +1240,7 @@ async function loadStats() {
     document.getElementById('c-warn').textContent  = d.today['WARNING']||0;
     const tot = Object.values(d.totals).reduce((a,v)=>a+v,0);
     document.getElementById('c-total').textContent = tot;
-    if(d.latest) document.getElementById('upd-txt').textContent = '갱신 '+d.latest.slice(5,16);
+    if(d.latest) document.getElementById('upd-txt').textContent = '갱신 '+d.latest.slice(5,16)+' KST';
 
     const dates  = [...new Set(d.daily.map(x=>x.date))].sort();
     const maxN   = Math.max(1,...dates.map(dt=>d.daily.filter(x=>x.date===dt).reduce((a,x)=>a+x.cnt,0)));
@@ -1283,7 +1286,7 @@ async function loadErrors() {
 }
 
 function clearFilter(){
-  document.getElementById('f-date').value=today;
+  document.getElementById('f-date').value=_kstDate();
   document.getElementById('f-level').value='';
   document.getElementById('f-q').value='';
   loadErrors();
@@ -1393,8 +1396,8 @@ async function loadPortfolio() {
     pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtW(d.total_pnl) : '-';
     pnlEl.style.color = pnlColor(d.total_pnl||0);
     document.getElementById('pf-cash').textContent = d.available_cash ? fmtW(d.available_cash) : '-';
-    document.getElementById('pf-ts').textContent = d.ts ? '기준: '+d.ts : '';
-    if(d.ts) document.getElementById('upd-txt').textContent = '갱신 '+d.ts.slice(5,16);
+    document.getElementById('pf-ts').textContent = d.ts ? '기준: '+d.ts+' KST' : '';
+    if(d.ts) document.getElementById('upd-txt').textContent = '갱신 '+d.ts.slice(5,16)+' KST';
 
     const tbody = document.getElementById('pf-tbody');
     if(!d.holdings || !d.holdings.length){
@@ -1543,8 +1546,8 @@ function appendChatMsg(role, text, agent) {
   const placeholder = hist.querySelector('div[style]');
   if(placeholder) placeholder.remove();
 
-  const now = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
-  const metaText = role==='user' ? now : `${agent||''} · ${now}`;
+  const now = _kstTime();  // KST 강제
+  const metaText = role==='user' ? now+' KST' : `${agent||''} · ${now} KST`;
   const div = document.createElement('div');
   div.className = `chat-msg ${role}`;
   div.innerHTML = `<div class="chat-bubble">${esc(text)}</div><div class="chat-meta">${metaText}</div>`;
@@ -1689,7 +1692,7 @@ async function loadNightPortfolio() {
     pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtUSD(d.total_pnl) : '-';
     pnlEl.style.color = pnlColor(d.total_pnl||0);
     document.getElementById('nt-cash-val').textContent = d.available_cash ? fmtUSD(d.available_cash) : '-';
-    document.getElementById('nt-pf-ts').textContent = d.ts ? 'as of '+d.ts : '';
+    document.getElementById('nt-pf-ts').textContent = d.ts ? 'as of '+d.ts+' KST' : '';
 
     const tbody = document.getElementById('nt-pf-tbody');
     if(!d.holdings || !d.holdings.length){

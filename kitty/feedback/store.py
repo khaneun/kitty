@@ -4,8 +4,11 @@
 system_prompt에 주입할 텍스트를 생성한다.
 """
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
+
+from kitty.utils import logger
 
 FEEDBACK_DIR = Path("feedback")
 MAX_ENTRIES = 14   # 보관할 최대 일수 (2주)
@@ -29,16 +32,28 @@ def load_entries(agent_name: str) -> list[dict[str, Any]]:
 
 
 def append_entry(agent_name: str, entry: dict[str, Any]) -> None:
-    """새 평가 항목 추가 (날짜가 같으면 덮어씀)"""
+    """새 평가 항목 추가 (날짜가 같으면 덮어씀). 원자적 쓰기로 파일 손상 방지."""
     entries = load_entries(agent_name)
     # 같은 날짜 항목 교체
     entries = [e for e in entries if e.get("date") != entry.get("date")]
     entries.append(entry)
     entries = entries[-MAX_ENTRIES:]
-    _path(agent_name).write_text(
-        json.dumps(entries, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    target = _path(agent_name)
+    # 원자적 쓰기: 임시 파일에 먼저 쓴 후 rename (동시 쓰기 시 JSON 손상 방지)
+    try:
+        fd = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".tmp", dir=target.parent, delete=False, encoding="utf-8"
+        )
+        fd.write(json.dumps(entries, ensure_ascii=False, indent=2))
+        fd.flush()
+        fd.close()
+        Path(fd.name).replace(target)
+    except Exception as e:
+        logger.warning(f"[피드백] {agent_name} 원자적 쓰기 실패, 직접 쓰기로 폴백: {e}")
+        target.write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
 def get_feedback_prompt(agent_name: str) -> str:
