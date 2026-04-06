@@ -51,6 +51,8 @@ AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용
 NIGHT_LOG_DIR     = Path(os.getenv("NIGHT_LOG_DIR",     "/night-logs"))
 NIGHT_FEEDBACK_DIR = Path(os.getenv("NIGHT_FEEDBACK_DIR", "/night-feedback"))
 NIGHT_TOKEN_DIR   = Path(os.getenv("NIGHT_TOKEN_DIR",    "/night-token_usage"))
+REPORTS_DIR       = Path(os.getenv("REPORTS_DIR",        "/reports"))
+NIGHT_REPORTS_DIR = Path(os.getenv("NIGHT_REPORTS_DIR",  "/night-reports"))
 NIGHT_PORTFOLIO_SNAPSHOT = NIGHT_LOG_DIR / "night_portfolio_snapshot.json"
 NIGHT_AGENT_CONTEXT      = NIGHT_LOG_DIR / "night_agent_context.json"
 
@@ -699,6 +701,91 @@ def api_night_token_usage(req: Request):
     }
 
 
+_NON_TRADE_STATUSES = ("SKIPPED", "FAILED")
+
+
+def _classify_trade(action: str, reason: str, pnl_rate) -> str:
+    if action == "BUY":      return "신규매수"
+    if action == "BUY_MORE": return "추가매수"
+    r = (reason or "").lower()
+    if "손절" in r:                        return "손절"
+    if "익절" in r or "목표" in r:         return "익절"
+    if "교체" in r or "정체" in r:         return "종목교체"
+    if pnl_rate is not None:
+        if pnl_rate < -0.5:               return "손절"
+        if pnl_rate > 0.5:                return "익절"
+    return "매도"
+
+
+@app.get("/api/trades")
+def api_trades(req: Request, days: int = Query(30, le=90)):
+    """reports/*.json + night-reports/*.json 에서 거래 내역 추출"""
+    _auth(req)
+    result = []
+
+    for reports_dir, source in [(REPORTS_DIR, "kitty"), (NIGHT_REPORTS_DIR, "night")]:
+        if not reports_dir.exists():
+            continue
+        files = sorted(reports_dir.glob("*.json"), reverse=True)[:days]
+        for path in files:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            date = data.get("date", path.stem)
+            for cycle in data.get("cycles", []):
+                ts = cycle.get("timestamp", "")
+                # pnl_rate 맵 (symbol → pnl_rate) from stock_evaluation
+                pnl_map: dict[str, float] = {}
+                for ev in cycle.get("stock_evaluation", {}).get("evaluations", []):
+                    sym = ev.get("symbol", "")
+                    if sym:
+                        pnl_map[sym] = ev.get("pnl_rate")
+                # order 맵 (symbol → order) from asset_management
+                order_map: dict[str, dict] = {}
+                for order in cycle.get("asset_management", {}).get("final_orders", []):
+                    sym = order.get("symbol", "")
+                    if sym:
+                        order_map[sym] = order
+                # 매수 결과
+                for r in cycle.get("buy_results", []):
+                    if r.get("status") in _NON_TRADE_STATUSES:
+                        continue
+                    sym = r.get("symbol", "")
+                    order = order_map.get(sym, {})
+                    action = order.get("action", "BUY")
+                    reason = r.get("reason") or order.get("reason", "")
+                    pnl_rate = pnl_map.get(sym)
+                    result.append({
+                        "date": date, "time": ts, "symbol": sym,
+                        "name": r.get("name", ""), "side": "매수", "action": action,
+                        "classify": _classify_trade(action, reason, pnl_rate),
+                        "quantity": r.get("quantity", 0), "price": r.get("price", 0),
+                        "status": r.get("status", ""), "reason": reason,
+                        "pnl_rate": pnl_rate, "source": source,
+                    })
+                # 매도 결과
+                for r in cycle.get("sell_results", []):
+                    if r.get("status") in _NON_TRADE_STATUSES:
+                        continue
+                    sym = r.get("symbol", "")
+                    order = order_map.get(sym, {})
+                    action = order.get("action", "SELL")
+                    reason = r.get("reason") or order.get("reason", "")
+                    pnl_rate = pnl_map.get(sym)
+                    result.append({
+                        "date": date, "time": ts, "symbol": sym,
+                        "name": r.get("name", ""), "side": "매도", "action": action,
+                        "classify": _classify_trade(action, reason, pnl_rate),
+                        "quantity": r.get("quantity", 0), "price": r.get("price", 0),
+                        "status": r.get("status", ""), "reason": reason,
+                        "pnl_rate": pnl_rate, "source": source,
+                    })
+
+    result.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
+    return {"total": len(result), "trades": result}
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(req: Request):
     _auth(req)
@@ -891,6 +978,11 @@ body{padding-bottom:80px}
 .chat-input-row{display:flex;gap:8px;align-items:flex-end;padding:10px 14px 18px;border-top:1px solid #21262d;flex-shrink:0}
 .chat-input{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:8px;padding:8px 10px;font-size:13px;resize:none;min-height:40px;max-height:100px;outline:none;font-family:inherit;line-height:1.5}
 .chat-input:focus{border-color:#58a6ff}
+/* 매매일지 분류 배지 */
+.trade-cls{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap}
+.cls-익절{background:#0d3321;color:#3fb950}.cls-손절{background:#2d1010;color:#f85149}
+.cls-신규매수{background:#0d2d3d;color:#58a6ff}.cls-추가매수{background:#142814;color:#57ab5a}
+.cls-종목교체{background:#2d2500;color:#d29922}.cls-매도{background:#21262d;color:#8b949e}
 </style>
 </head>
 <body>
@@ -911,6 +1003,7 @@ body{padding-bottom:80px}
 
 <div class="tabs">
   <div class="tab active" id="main-tab-agents" onclick="switchMain('agents')">🤖 성적표</div>
+  <div class="tab" id="main-tab-trades" onclick="switchMain('trades')">📒 매매일지</div>
   <div class="tab" id="main-tab-admin" onclick="switchMain('admin')">⚙️ 관리</div>
 </div>
 <div class="subtabs" id="subtabs" style="display:none">
@@ -1075,6 +1168,48 @@ body{padding-bottom:80px}
 </div>
 </div>
 
+<!-- ══ 매매일지 탭 ══ -->
+<div id="tab-trades" class="tab-content">
+<div class="wrap">
+  <div class="cards">
+    <div class="card"><div class="num blue"   id="tr-buy-cnt">-</div><div class="lbl">매수</div></div>
+    <div class="card"><div class="num gray"   id="tr-sell-cnt">-</div><div class="lbl">매도</div></div>
+    <div class="card"><div class="num yellow" id="tr-total-cnt">-</div><div class="lbl">전체</div></div>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="num green"  id="tr-profit-cnt">-</div><div class="lbl">익절</div></div>
+    <div class="card"><div class="num red"    id="tr-loss-cnt">-</div><div class="lbl">손절</div></div>
+    <div class="card"><div class="num gray"   id="tr-other-cnt">-</div><div class="lbl">기타매도</div></div>
+  </div>
+  <div class="filters">
+    <input type="date" id="tr-date">
+    <select id="tr-cls">
+      <option value="">전체 분류</option>
+      <option value="신규매수">신규매수</option>
+      <option value="추가매수">추가매수</option>
+      <option value="익절">익절</option>
+      <option value="손절">손절</option>
+      <option value="종목교체">종목교체</option>
+      <option value="매도">매도</option>
+    </select>
+    <select id="tr-src">
+      <option value="">전체 (국내+해외)</option>
+      <option value="kitty">🐱 Kitty (국내)</option>
+      <option value="night">🌙 Night (해외)</option>
+    </select>
+    <button class="btn btn-pri" onclick="loadTrades()">조회</button>
+    <button class="btn" onclick="clearTradeFilter()">초기화</button>
+  </div>
+  <div class="meta" id="tr-meta"></div>
+  <div class="tbl-wrap">
+    <table class="log" style="min-width:580px">
+      <thead><tr><th>날짜/시각</th><th>종목</th><th>분류</th><th>수량</th><th>가격</th><th>수익률</th><th>사유 (클릭=전체)</th></tr></thead>
+      <tbody id="tr-tbody"></tbody>
+    </table>
+  </div>
+</div>
+</div>
+
 <!-- FAB 채팅 버튼 -->
 <button class="fab" id="fab-chat" onclick="openChat()" title="에이전트 채팅">💬</button>
 
@@ -1135,7 +1270,7 @@ function switchView(view) {
     document.querySelectorAll('.tabs .tab, #subtabs').forEach(el => el.style.display='');
   } else {
     // night view: hide kitty tabs, show night tab
-    ['errors','tokens','agents'].forEach(n => document.getElementById('tab-'+n).classList.remove('active'));
+    ['errors','tokens','agents','trades'].forEach(n => document.getElementById('tab-'+n).classList.remove('active'));
     document.getElementById('tab-night').classList.add('active');
     document.querySelectorAll('.tabs').forEach(el => el.style.display='none');
     document.getElementById('subtabs').style.display='none';
@@ -1147,16 +1282,20 @@ function switchView(view) {
 let _adminTab = 'errors';
 
 function switchMain(name) {
-  const isAgents = name === 'agents';
-  document.getElementById('main-tab-agents').classList.toggle('active', isAgents);
-  document.getElementById('main-tab-admin').classList.toggle('active', !isAgents);
-  document.getElementById('subtabs').style.display = isAgents ? 'none' : 'flex';
-  ['errors','tokens','agents','night'].forEach(n => {
+  ['agents','trades','admin'].forEach(t => {
+    const el = document.getElementById('main-tab-'+t);
+    if(el) el.classList.toggle('active', t===name);
+  });
+  document.getElementById('subtabs').style.display = name==='admin' ? 'flex' : 'none';
+  ['errors','tokens','agents','night','trades'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
-  if(isAgents) {
+  if(name === 'agents') {
     document.getElementById('tab-agents').classList.add('active');
     loadTendency(); loadPortfolio(); loadAgentScores();
+  } else if(name === 'trades') {
+    document.getElementById('tab-trades').classList.add('active');
+    loadTrades();
   } else {
     switchAdmin(_adminTab);
   }
@@ -1630,6 +1769,67 @@ async function pollChatResponse(id, agent) {
   setTimeout(poll, 2000);
 }
 
+// ── 매매일지 탭 ─────────────────────────────────────────
+async function loadTrades() {
+  try {
+    const dateVal = document.getElementById('tr-date').value;
+    const clsVal  = document.getElementById('tr-cls').value;
+    const srcVal  = document.getElementById('tr-src').value;
+    const d = await fetch('/api/trades?days=30').then(r=>r.json());
+    let trades = d.trades || [];
+
+    // 필터
+    if(dateVal) trades = trades.filter(t => t.date === dateVal);
+    if(clsVal)  trades = trades.filter(t => t.classify === clsVal);
+    if(srcVal)  trades = trades.filter(t => t.source === srcVal);
+
+    // 요약 카운트
+    const buys  = trades.filter(t => t.side === '매수').length;
+    const sells = trades.filter(t => t.side === '매도').length;
+    const profits = trades.filter(t => t.classify === '익절').length;
+    const losses  = trades.filter(t => t.classify === '손절').length;
+    const others  = sells - profits - losses;
+    document.getElementById('tr-buy-cnt').textContent    = buys;
+    document.getElementById('tr-sell-cnt').textContent   = sells;
+    document.getElementById('tr-total-cnt').textContent  = trades.length;
+    document.getElementById('tr-profit-cnt').textContent = profits;
+    document.getElementById('tr-loss-cnt').textContent   = losses;
+    document.getElementById('tr-other-cnt').textContent  = Math.max(0, others);
+    document.getElementById('tr-meta').textContent = `총 ${trades.length}건`;
+
+    const tbody = document.getElementById('tr-tbody');
+    if(!trades.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">거래 내역 없음</td></tr>';
+      return;
+    }
+    tbody.innerHTML = trades.map(t => {
+      const clsCss = 'trade-cls cls-'+t.classify;
+      const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(1)+'%' : '-';
+      const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#3fb950':'#f85149';
+      const priceStr = t.price ? Number(t.price).toLocaleString() : '-';
+      const srcIcon = t.source==='night' ? '🌙' : '🐱';
+      const shortReason = t.reason ? (t.reason.length>50?t.reason.slice(0,50)+'…':t.reason) : '-';
+      const fullReason = JSON.stringify(t.reason||'');
+      return `<tr>
+        <td class="ts-col">${srcIcon} ${t.date}<br><span style="color:#484f58">${t.time}</span></td>
+        <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
+        <td><span class="${clsCss}">${t.classify}</span></td>
+        <td style="text-align:right">${(t.quantity||0).toLocaleString()}</td>
+        <td style="text-align:right">${priceStr}</td>
+        <td style="text-align:right;color:${pnlColor};font-weight:700">${pnlTxt}</td>
+        <td class="msg-col" onclick="showModal('${esc(t.date+' '+t.time)}','${esc(t.classify)}','${esc(t.symbol)}',${fullReason})">${esc(shortReason)}</td>
+      </tr>`;
+    }).join('');
+  } catch(e){ console.error('trades',e); }
+}
+
+function clearTradeFilter() {
+  document.getElementById('tr-date').value = '';
+  document.getElementById('tr-cls').value  = '';
+  document.getElementById('tr-src').value  = '';
+  loadTrades();
+}
+
 // ── Night Mode 데이터 로드 ───────────────────────────────
 const NLV_LABELS = {1:'Very Aggressive',2:'Aggressive',3:'Active',4:'Balanced',5:'Conservative',6:'Very Conservative'};
 function setNightDimCell(idPfx, lv, val) {
@@ -1759,6 +1959,9 @@ setInterval(()=>{
   }
   if(document.getElementById('tab-night').classList.contains('active')){
     loadNightPortfolio(); loadNightAgentScores();
+  }
+  if(document.getElementById('tab-trades').classList.contains('active')){
+    loadTrades();
   }
 }, 60000);
 

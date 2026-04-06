@@ -10,6 +10,7 @@ services:
       - ./feedback:/app/feedback
       - ./token_usage:/app/token_usage
       - ./commands:/app/commands
+      - ./reports:/app/reports
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/host/kitty
     logging:
@@ -53,6 +54,8 @@ services:
       - ./night-logs:/night-logs:ro               # night 로그 읽기 전용
       - ./night-feedback:/night-feedback:ro       # night 피드백 읽기 전용
       - ./night-token_usage:/night-token_usage:ro # night 토큰 사용량 읽기 전용
+      - ./reports:/reports:ro                     # 국내 매매 리포트 읽기 전용
+      - ./night-reports:/night-reports:ro         # 해외 매매 리포트 읽기 전용
     environment:
       - MONITOR_PASSWORD=${MONITOR_PASSWORD:-kitty}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}

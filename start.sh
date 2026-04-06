@@ -45,6 +45,7 @@ mkdir -p /home/ec2-user/kitty/logs
 
 mkdir -p /home/ec2-user/kitty/token_usage
 mkdir -p /home/ec2-user/kitty/commands
+mkdir -p /home/ec2-user/kitty/reports
 
 docker run -d \
   --name kitty-trader \
@@ -55,6 +56,7 @@ docker run -d \
   -v /home/ec2-user/kitty/feedback:/app/feedback \
   -v /home/ec2-user/kitty/token_usage:/app/token_usage \
   -v /home/ec2-user/kitty/commands:/app/commands \
+  -v /home/ec2-user/kitty/reports:/app/reports \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /home/ec2-user/kitty:/host/kitty \
   kitty-trader
@@ -67,6 +69,7 @@ docker build -t kitty-monitor ./monitor
 docker image prune -f
 
 mkdir -p /home/ec2-user/kitty/monitor-data
+mkdir -p /home/ec2-user/kitty/reports
 
 # 모니터 자격증명 추출 (.env 삭제 전)
 _TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' /home/ec2-user/kitty/.env | cut -d= -f2-)
@@ -140,6 +143,8 @@ docker run -d \
   -v /home/ec2-user/kitty/night-logs:/night-logs:ro \
   -v /home/ec2-user/kitty/night-feedback:/night-feedback:ro \
   -v /home/ec2-user/kitty/night-token_usage:/night-token_usage:ro \
+  -v /home/ec2-user/kitty/reports:/reports:ro \
+  -v /home/ec2-user/kitty/night-reports:/night-reports:ro \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \
   -e MONITOR_PASSWORD="$_MON_PW" \
