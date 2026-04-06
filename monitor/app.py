@@ -978,6 +978,10 @@ body{padding-bottom:80px}
 .chat-input-row{display:flex;gap:8px;align-items:flex-end;padding:10px 14px 18px;border-top:1px solid #21262d;flex-shrink:0}
 .chat-input{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:8px;padding:8px 10px;font-size:13px;resize:none;min-height:40px;max-height:100px;outline:none;font-family:inherit;line-height:1.5}
 .chat-input:focus{border-color:#58a6ff}
+/* 페이지네이션 */
+.pg-btn{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;min-width:32px}
+.pg-btn:hover:not(:disabled){background:#30363d}.pg-btn:disabled{opacity:.35;cursor:default}
+.pg-cur{background:#1c4a7a!important;border-color:#58a6ff!important;color:#cae0f9!important;font-weight:700}
 /* 매매일지 분류 배지 */
 .trade-cls{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap}
 .cls-익절{background:#0d3321;color:#3fb950}.cls-손절{background:#2d1010;color:#f85149}
@@ -1207,6 +1211,7 @@ body{padding-bottom:80px}
       <tbody id="tr-tbody"></tbody>
     </table>
   </div>
+  <div id="tr-pagination" style="display:flex;justify-content:center;gap:4px;margin-top:10px;flex-wrap:wrap"></div>
 </div>
 </div>
 
@@ -1770,7 +1775,12 @@ async function pollChatResponse(id, agent) {
 }
 
 // ── 매매일지 탭 ─────────────────────────────────────────
-async function loadTrades() {
+const TR_PAGE_SIZE = 10;
+let _trAllTrades = [];
+let _trPage = 1;
+
+async function loadTrades(resetPage) {
+  if(resetPage !== false) _trPage = 1;
   try {
     const dateVal = document.getElementById('tr-date').value;
     const clsVal  = document.getElementById('tr-cls').value;
@@ -1783,9 +1793,11 @@ async function loadTrades() {
     if(clsVal)  trades = trades.filter(t => t.classify === clsVal);
     if(srcVal)  trades = trades.filter(t => t.source === srcVal);
 
-    // 요약 카운트
-    const buys  = trades.filter(t => t.side === '매수').length;
-    const sells = trades.filter(t => t.side === '매도').length;
+    _trAllTrades = trades;
+
+    // 요약 카운트 (필터된 전체 기준)
+    const buys    = trades.filter(t => t.side === '매수').length;
+    const sells   = trades.filter(t => t.side === '매도').length;
     const profits = trades.filter(t => t.classify === '익절').length;
     const losses  = trades.filter(t => t.classify === '손절').length;
     const others  = sells - profits - losses;
@@ -1795,32 +1807,71 @@ async function loadTrades() {
     document.getElementById('tr-profit-cnt').textContent = profits;
     document.getElementById('tr-loss-cnt').textContent   = losses;
     document.getElementById('tr-other-cnt').textContent  = Math.max(0, others);
-    document.getElementById('tr-meta').textContent = `총 ${trades.length}건`;
 
-    const tbody = document.getElementById('tr-tbody');
-    if(!trades.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">거래 내역 없음</td></tr>';
-      return;
-    }
-    tbody.innerHTML = trades.map(t => {
-      const clsCss = 'trade-cls cls-'+t.classify;
-      const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(1)+'%' : '-';
-      const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#3fb950':'#f85149';
-      const priceStr = t.price ? Number(t.price).toLocaleString() : '-';
-      const srcIcon = t.source==='night' ? '🌙' : '🐱';
-      const shortReason = t.reason ? (t.reason.length>50?t.reason.slice(0,50)+'…':t.reason) : '-';
-      const fullReason = JSON.stringify(t.reason||'');
-      return `<tr>
-        <td class="ts-col">${srcIcon} ${t.date}<br><span style="color:#484f58">${t.time}</span></td>
-        <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
-        <td><span class="${clsCss}">${t.classify}</span></td>
-        <td style="text-align:right">${(t.quantity||0).toLocaleString()}</td>
-        <td style="text-align:right">${priceStr}</td>
-        <td style="text-align:right;color:${pnlColor};font-weight:700">${pnlTxt}</td>
-        <td class="msg-col" onclick="showModal('${esc(t.date+' '+t.time)}','${esc(t.classify)}','${esc(t.symbol)}',${fullReason})">${esc(shortReason)}</td>
-      </tr>`;
-    }).join('');
+    renderTradesPage();
   } catch(e){ console.error('trades',e); }
+}
+
+function renderTradesPage() {
+  const trades = _trAllTrades;
+  const total  = trades.length;
+  const pages  = Math.max(1, Math.ceil(total / TR_PAGE_SIZE));
+  if(_trPage > pages) _trPage = pages;
+
+  const start  = (_trPage - 1) * TR_PAGE_SIZE;
+  const slice  = trades.slice(start, start + TR_PAGE_SIZE);
+
+  document.getElementById('tr-meta').textContent =
+    `총 ${total}건 · ${_trPage}/${pages} 페이지`;
+
+  const tbody = document.getElementById('tr-tbody');
+  if(!total) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">거래 내역 없음</td></tr>';
+    document.getElementById('tr-pagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = slice.map(t => {
+    const clsCss = 'trade-cls cls-'+t.classify;
+    const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(1)+'%' : '-';
+    const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#3fb950':'#f85149';
+    const priceStr = t.price ? Number(t.price).toLocaleString() : '-';
+    const srcIcon = t.source==='night' ? '🌙' : '🐱';
+    const shortReason = t.reason ? (t.reason.length>50?t.reason.slice(0,50)+'…':t.reason) : '-';
+    const fullReason = JSON.stringify(t.reason||'');
+    return `<tr>
+      <td class="ts-col">${srcIcon} ${t.date}<br><span style="color:#484f58">${t.time}</span></td>
+      <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
+      <td><span class="${clsCss}">${t.classify}</span></td>
+      <td style="text-align:right">${(t.quantity||0).toLocaleString()}</td>
+      <td style="text-align:right">${priceStr}</td>
+      <td style="text-align:right;color:${pnlColor};font-weight:700">${pnlTxt}</td>
+      <td class="msg-col" onclick="showModal('${esc(t.date+' '+t.time)}','${esc(t.classify)}','${esc(t.symbol)}',${fullReason})">${esc(shortReason)}</td>
+    </tr>`;
+  }).join('');
+
+  // 페이지네이션
+  const pg = document.getElementById('tr-pagination');
+  if(pages <= 1) { pg.innerHTML = ''; return; }
+  const WINDOW = 5;
+  const half = Math.floor(WINDOW / 2);
+  let pStart = Math.max(1, _trPage - half);
+  let pEnd   = Math.min(pages, pStart + WINDOW - 1);
+  if(pEnd - pStart < WINDOW - 1) pStart = Math.max(1, pEnd - WINDOW + 1);
+
+  let html = `<button class="pg-btn" onclick="goTradePage(1)" ${_trPage===1?'disabled':''}>«</button>`;
+  html    += `<button class="pg-btn" onclick="goTradePage(${_trPage-1})" ${_trPage===1?'disabled':''}>‹</button>`;
+  for(let i = pStart; i <= pEnd; i++) {
+    html += `<button class="pg-btn ${i===_trPage?'pg-cur':''}" onclick="goTradePage(${i})">${i}</button>`;
+  }
+  html += `<button class="pg-btn" onclick="goTradePage(${_trPage+1})" ${_trPage===pages?'disabled':''}>›</button>`;
+  html += `<button class="pg-btn" onclick="goTradePage(${pages})" ${_trPage===pages?'disabled':''}>»</button>`;
+  pg.innerHTML = html;
+}
+
+function goTradePage(p) {
+  _trPage = p;
+  renderTradesPage();
 }
 
 function clearTradeFilter() {
@@ -1961,7 +2012,7 @@ setInterval(()=>{
     loadNightPortfolio(); loadNightAgentScores();
   }
   if(document.getElementById('tab-trades').classList.contains('active')){
-    loadTrades();
+    loadTrades(false); // 자동 갱신 시 현재 페이지 유지
   }
 }, 60000);
 
