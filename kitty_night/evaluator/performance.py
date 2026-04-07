@@ -35,7 +35,7 @@ class NightPerformanceEvaluator:
             logger.info("[Night:Eval] No symbols to analyze")
             return {}
 
-        eod = await self._fetch_eod(symbols)
+        eod = await self._fetch_prices(symbols)
         logger.info(f"[Night:Eval] EOD prices collected: {len(eod)} symbols")
 
         results: dict[str, Any] = {}
@@ -84,7 +84,7 @@ class NightPerformanceEvaluator:
                 symbols.add(r.get("symbol", ""))
         return {s for s in symbols if s}
 
-    async def _fetch_eod(self, symbols: set[str]) -> dict[str, dict]:
+    async def _fetch_prices(self, symbols: set[str]) -> dict[str, dict]:
         eod: dict[str, dict] = {}
         for sym in symbols:
             try:

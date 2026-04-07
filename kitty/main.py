@@ -458,7 +458,7 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"시작 시 잔고 조회 실패 (무시): {e}")
     last_report_date = daily_report.date
-    last_eval_date: str = ""
+    # last_eval_date 제거됨 — 매 사이클 평가로 전환
     evaluator = PerformanceEvaluator(broker)
 
     try:
@@ -488,29 +488,6 @@ async def main() -> None:
                 daily_report = DailyReport()
                 last_report_date = today
 
-            # 장 마감 직후 성과 평가 (15:35~16:00, 하루 1회)
-            if _is_post_market_eval_window() and last_eval_date != today:
-                last_eval_date = today
-                try:
-                    results = await evaluator.run(daily_report)
-                    if results:
-                        # 에이전트 system_prompt 즉시 갱신
-                        for agent in [sector_analyst, stock_evaluator, stock_picker,
-                                      asset_manager, buy_executor, sell_executor,
-                                      tendency_agent]:
-                            agent.reload_feedback()
-                        await reporter.send(_format_eval_summary(results))
-
-                        # 투자성향관리자: 성과 분석 기반 내일 레벨 결정
-                        try:
-                            new_profile = await tendency_agent.update_strategy(results)
-                            _save_agent_context("투자성향관리자", new_profile)
-                            await reporter.send(_format_tendency_update(new_profile))
-                        except Exception as te:
-                            logger.error(f"투자성향 업데이트 오류: {te}")
-                except Exception as e:
-                    logger.error(f"성과 평가 오류: {e}")
-
             # 8:50 이전 또는 15:30 이후에는 사이클 건너뜀 (모의/실전 공통)
             if not _is_pre_market_or_market():
                 logger.debug("장 외 시간 - 대기 중")
@@ -528,6 +505,30 @@ async def main() -> None:
                         reporter,
                         daily_report,
                     )
+
+                    # ── 사이클 종료 후 즉시 성과 평가 ──
+                    if daily_report.cycles:
+                        try:
+                            results = await evaluator.run(daily_report)
+                            if results:
+                                all_agents = [
+                                    sector_analyst, stock_evaluator, stock_picker,
+                                    asset_manager, buy_executor, sell_executor,
+                                    tendency_agent,
+                                ]
+                                for agent in all_agents:
+                                    agent.reload_feedback()
+                                logger.info("[평가] 피드백 반영 완료 → 다음 사이클에 적용")
+
+                                # 투자성향 업데이트
+                                try:
+                                    new_profile = await tendency_agent.update_strategy(results)
+                                    _save_agent_context("투자성향관리자", new_profile)
+                                except Exception as te:
+                                    logger.error(f"투자성향 업데이트 오류: {te}")
+                        except Exception as e:
+                            logger.error(f"사이클 평가 오류: {e}")
+
                 except Exception as e:
                     logger.error(f"매매 사이클 오류: {e}")
                     await reporter.report_error(str(e))

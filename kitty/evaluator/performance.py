@@ -1,8 +1,8 @@
-"""장 마감 후 에이전트 성과 평가 엔진
+"""에이전트 성과 평가 엔진 — 매 사이클 종료 후 실행
 
 평가 흐름:
   1. 오늘 DailyReport에서 각 에이전트의 결정 수집
-  2. KIS API로 EOD 가격/등락률 조회
+  2. KIS API로 현재가/등락률 조회
   3. 에이전트별 정량 지표 + 구체적 판단 내역 기록
   4. AI로 자연어 피드백 (성과 요약 + 개선 지침 + 유지할 패턴)
   5. feedback/*.json 에 저장 (BaseAgent가 다음 사이클부터 system_prompt에 주입)
@@ -18,7 +18,7 @@ from kitty.utils import logger
 
 
 class PerformanceEvaluator:
-    """장 마감 후 에이전트별 성과 평가"""
+    """매 사이클 종료 후 에이전트별 성과 평가"""
 
     def __init__(self, broker: Any) -> None:
         self._broker = broker
@@ -33,15 +33,15 @@ class PerformanceEvaluator:
             logger.info("[평가] 오늘 사이클 없음 — 평가 건너뜀")
             return {}
 
-        logger.info("[평가] 장 마감 성과 평가 시작")
+        logger.info("[평가] 사이클 성과 평가 시작")
 
         symbols = self._collect_symbols(daily_report)
         if not symbols:
             logger.info("[평가] 분석 종목 없음")
             return {}
 
-        eod = await self._fetch_eod(symbols)
-        logger.info(f"[평가] EOD 가격 수집: {len(eod)}개 종목")
+        eod = await self._fetch_prices(symbols)
+        logger.info(f"[평가] 현재가 수집: {len(eod)}개 종목")
 
         results: dict[str, Any] = {}
         for agent_name, eval_fn in [
@@ -92,7 +92,7 @@ class PerformanceEvaluator:
                 symbols.add(r.get("symbol", ""))
         return {s for s in symbols if s}
 
-    async def _fetch_eod(self, symbols: set[str]) -> dict[str, dict]:
+    async def _fetch_prices(self, symbols: set[str]) -> dict[str, dict]:
         eod: dict[str, dict] = {}
         for sym in symbols:
             try:
@@ -394,15 +394,15 @@ class PerformanceEvaluator:
             detail_section = f"\n[구체적 판단 내역 — ✓ 정확, ✗ 오판]\n{decision_details}\n"
 
         prompt = (
-            f"다음은 오늘 '{agent_name}' 에이전트의 성과 데이터입니다.\n"
+            f"다음은 '{agent_name}' 에이전트의 최근 사이클 성과 데이터입니다.\n"
             f"점수는 0~100점 척도입니다.\n\n"
             f"[성과 지표]\n{json.dumps(metrics, ensure_ascii=False, indent=2)}\n"
             f"{detail_section}\n"
             "위 데이터를 분석하여 아래 JSON 형식으로만 응답하세요:\n"
             "{\n"
-            '  "summary": "오늘 성과 요약 — 점수·핵심 수치·잘한 점·못한 점 포함 (100자 이내)",\n'
-            '  "improvement": "내일 개선할 구체적 행동 지침 — 무엇을 어떻게 바꿀지, 오늘 오판의 원인과 대안을 명시 (200자 이내)",\n'
-            '  "good_pattern": "오늘 잘한 판단이 있다면 내일도 유지할 패턴 (80자 이내, 없으면 빈 문자열)"\n'
+            '  "summary": "성과 요약 — 점수·핵심 수치·잘한 점·못한 점 포함 (100자 이내)",\n'
+            '  "improvement": "다음 사이클에 개선할 구체적 행동 지침 — 무엇을 어떻게 바꿀지, 오판의 원인과 대안을 명시 (200자 이내)",\n'
+            '  "good_pattern": "잘한 판단이 있다면 유지할 패턴 (80자 이내, 없으면 빈 문자열)"\n'
             "}"
         )
         try:

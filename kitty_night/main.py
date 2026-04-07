@@ -395,6 +395,28 @@ async def main() -> None:
                         asset_manager, buy_executor, sell_executor,
                         tendency_agent, reporter, daily_report,
                     )
+
+                    # ── 사이클 종료 후 즉시 성과 평가 ──
+                    if daily_report.cycles:
+                        try:
+                            results = await evaluator.run(daily_report)
+                            if results:
+                                all_agents = [
+                                    sector_analyst, stock_evaluator, stock_picker,
+                                    asset_manager, buy_executor, sell_executor,
+                                    tendency_agent,
+                                ]
+                                for agent in all_agents:
+                                    agent.reload_feedback()
+                                logger.info("[Night:Eval] Feedback applied → next cycle")
+                                try:
+                                    new_profile = await tendency_agent.update_strategy(results)
+                                    _save_agent_context("NightTendency", new_profile)
+                                except Exception as te:
+                                    logger.error(f"Tendency update error: {te}")
+                        except Exception as e:
+                            logger.error(f"Cycle evaluation error: {e}")
+
                 except Exception as e:
                     logger.error(f"Trading cycle error: {e}")
                     await reporter.report_error(str(e))
@@ -404,30 +426,9 @@ async def main() -> None:
             if phase == MarketPhase.POST_MARKET:
                 if not last_eval_done:
                     last_eval_done = True
-                    logger.info("[Night] Phase: POST_MARKET — running performance evaluation")
-                    try:
-                        results = await evaluator.run(daily_report)
-                        if results:
-                            for agent in [
-                                sector_analyst, stock_evaluator, stock_picker,
-                                asset_manager, buy_executor, sell_executor,
-                                tendency_agent,
-                            ]:
-                                agent.reload_feedback()
-                            await reporter.send(_format_eval_summary(results))
-
-                            try:
-                                new_profile = await tendency_agent.update_strategy(results)
-                                _save_agent_context("NightTendency", new_profile)
-                                await reporter.send(_format_tendency_update(new_profile))
-                            except Exception as te:
-                                logger.error(f"Tendency update error: {te}")
-                    except Exception as e:
-                        logger.error(f"Performance evaluation error: {e}")
-
                     await reporter.send(daily_report.telegram_summary())
                 else:
-                    logger.info("[Night] Phase: POST_MARKET — evaluation already done, waiting")
+                    logger.info("[Night] Phase: POST_MARKET — waiting")
                 await asyncio.sleep(300)
                 continue
 

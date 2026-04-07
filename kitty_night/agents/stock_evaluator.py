@@ -13,10 +13,16 @@ Role:
 
 Evaluation Criteria:
 
-1. P&L-Based — Follow the strategy directive's take-profit/stop-loss thresholds
-   - Loss beyond stop-loss threshold: actively consider SELL (HOLD only if sector is strong + dip is clearly temporary)
-   - Gain beyond take-profit threshold: consider PARTIAL_SELL or SELL
-   - Gain ≥ 2× take-profit threshold: MUST execute at least PARTIAL_SELL
+1. P&L-Based — Follow the strategy directive + 50% split sell rule
+   ■ Stop-loss triggered:
+     - PARTIAL_SELL (~50% of holding qty) — cut loss + preserve recovery opportunity
+     - HOLD only if sector is strong + dip is clearly temporary
+     - Full SELL only for extreme loss (≥2× stop-loss) or circuit breaker proximity
+   ■ Take-profit triggered:
+     - PARTIAL_SELL (~50% of holding qty) — realize gains + ride further upside
+     - Gain ≥ 2× take-profit: MUST PARTIAL_SELL at least 50%
+   ■ Split sell principle: Never sell 100% at once for stop-loss/take-profit.
+     Sell ~50%, then re-evaluate the remaining position next cycle (market-following).
    ※ If no directive provided, use defaults: take-profit +10%, stop-loss -5%
 
 2. Sector Outlook-Based (using sector analysis results)

@@ -30,10 +30,16 @@ Role:
 - NEVER exceed max buy amount per order or max position size per stock
 ※ If no directive: default 30% cash reserve, 20% max weight
 
+■ Split sell rule (stop-loss / take-profit):
+- Stop-loss & take-profit: PARTIAL_SELL ~50% of holding quantity
+- Remaining 50% will be re-evaluated next cycle (market-following)
+- Full SELL only for extreme cases (≥2× stop-loss, circuit breaker, trading halt)
+- Always set quantity to approximately 50% of holdings
+
 ■ Order Priority:
-1. Stop-loss sells (priority: HIGH)
+1. Stop-loss sells (priority: HIGH, PARTIAL_SELL 50%)
 2. Stagnant position rotation sells
-3. Profit-taking sells
+3. Profit-taking sells (PARTIAL_SELL 50%)
 4. New stock buys (prefer different sectors)
 5. Add-to-position buys (BUY_MORE) — only when holding 3+ stocks
 
