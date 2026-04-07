@@ -63,9 +63,10 @@ NIGHT_AGENTS = ["NightSectorAnalyst", "NightStockPicker", "NightStockEvaluator",
 import base64 as _b64
 _LOGO_URI = ""
 for _logo_candidate in [
-    Path(__file__).parent.parent / "kitty_logo.png",
+    Path(__file__).parent / "kitty_logo.png",       # 컨테이너: /app/kitty_logo.png
+    Path(__file__).parent / "kitty_logo.PNG",
+    Path(__file__).parent.parent / "kitty_logo.png", # 로컬 개발: 프로젝트 루트
     Path(__file__).parent.parent / "kitty_logo.PNG",
-    Path(__file__).parent / "kitty_logo.png",
 ]:
     if _logo_candidate.exists():
         _LOGO_URI = "data:image/png;base64," + _b64.b64encode(_logo_candidate.read_bytes()).decode()
@@ -817,7 +818,7 @@ _HTML = r"""<!DOCTYPE html>
 body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px}
 header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;gap:10px}
 .logo{font-size:15px;font-weight:700;color:#f0f6fc;flex-shrink:0;display:flex;align-items:center;gap:8px}
-.logo-img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:#ffffff;flex-shrink:0;transition:background 0.4s}
+.logo-img{border-radius:12px;background:#ffffff;flex-shrink:0;transition:background 0.4s;display:block}
 .gnb{display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end}
 .upd{font-size:11px;color:#8b949e;display:flex;align-items:center;gap:5px;flex-shrink:0}
 .dot{width:7px;height:7px;border-radius:50%;background:#3fb950;animation:blink 2s infinite;flex-shrink:0}
@@ -1314,6 +1315,8 @@ function switchMain(name) {
     }
   } else if(name === 'trades') {
     document.getElementById('tab-trades').classList.add('active');
+    // view에 따라 소스 자동 필터 (수동으로 바꿀 수도 있음)
+    document.getElementById('tr-src').value = _currentView === 'night' ? 'night' : 'kitty';
     loadTrades();
   } else {
     switchAdmin(_adminTab);

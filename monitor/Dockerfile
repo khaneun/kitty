@@ -9,6 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+COPY kitty_logo.png .
 
 # 로그 마운트 포인트 (읽기 전용)
 VOLUME ["/logs", "/data"]
