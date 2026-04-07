@@ -818,7 +818,7 @@ _HTML = r"""<!DOCTYPE html>
 body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px}
 header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;gap:10px}
 .logo{font-size:15px;font-weight:700;color:#f0f6fc;flex-shrink:0;display:flex;align-items:center;gap:8px}
-.logo-img{border-radius:12px;background:#ffffff;flex-shrink:0;transition:background 0.4s;display:block}
+.logo-img{width:22px;height:22px;border-radius:50%;object-fit:cover;background:#ffffff;flex-shrink:0;transition:background 0.4s}
 .gnb{display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end}
 .upd{font-size:11px;color:#8b949e;display:flex;align-items:center;gap:5px;flex-shrink:0}
 .dot{width:7px;height:7px;border-radius:50%;background:#3fb950;animation:blink 2s infinite;flex-shrink:0}
