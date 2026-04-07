@@ -31,6 +31,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
     async def _execute_smart_buy(
         self,
         symbol: str,
+        excd: str,
         quantity: int,
         price: float,
         order_type: str,
@@ -78,7 +79,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
                 try:
                     if attempt == 0 and order_price > 0:
                         logger.info(f"[Night:BuyExecutor] {chunk_label} limit buy @ ${order_price:,.2f}")
-                        order = await self.broker.buy(symbol, chunk_qty, order_price)
+                        order = await self.broker.buy(symbol, excd, chunk_qty, order_price)
                         order_id = order.order_id
 
                         await asyncio.sleep(10)
@@ -103,7 +104,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
                                 logger.info(
                                     f"[Night:BuyExecutor] {chunk_label} unfilled ({remaining_qty} remaining) — cancel & retry market"
                                 )
-                                await self.broker.cancel_order(order_id)
+                                await self.broker.cancel_order(order_id, excd, symbol, chunk_qty)
                                 await asyncio.sleep(3)
                                 order_price = 0
                         except Exception as e:
@@ -111,7 +112,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
                             order_price = 0
                     else:
                         logger.info(f"[Night:BuyExecutor] {chunk_label} market buy attempt {attempt + 1}")
-                        order = await self.broker.buy(symbol, chunk_qty, 0)
+                        order = await self.broker.buy(symbol, excd, chunk_qty, 0)
                         logger.info(f"[Night:BuyExecutor] {chunk_label} market order submitted")
                         chunk_results.append({
                             "symbol": symbol,
@@ -156,6 +157,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
 
         for order in buy_orders:
             symbol = order["symbol"]
+            excd = order.get("excd", "NAS")
             quantity = int(order["quantity"])
             price = float(order.get("price", 0))
             order_type = order.get("order_type", "SINGLE")
@@ -180,7 +182,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
 
             try:
                 chunks = await self._execute_smart_buy(
-                    symbol, quantity, price, effective_order_type, priority, name
+                    symbol, excd, quantity, price, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
                 logger.info(f"[Night:BuyExecutor] {_label} smart buy done: {len(chunks)} chunks")

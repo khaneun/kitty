@@ -1,7 +1,7 @@
 """Kitty Night Mode 설정 — 해외주식 자동매매 환경변수"""
 from enum import Enum
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,31 +45,54 @@ EXCHANGE_LABELS: dict[str, str] = {
 
 class NightSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env.night",
+        # .env를 기본으로 읽고, .env.night가 있으면 덮어씀 (night 전용 오버라이드용)
+        env_file=(".env", ".env.night"),
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
-    # AI Provider
-    ai_provider: AIProvider = Field(default=AIProvider.OPENAI, alias="NIGHT_AI_PROVIDER")
+    # AI Provider — NIGHT_AI_PROVIDER 우선, 없으면 AI_PROVIDER 사용
+    ai_provider: AIProvider = Field(
+        default=AIProvider.OPENAI,
+        validation_alias=AliasChoices("NIGHT_AI_PROVIDER", "AI_PROVIDER"),
+    )
     ai_model: str = Field(default="", alias="NIGHT_AI_MODEL")
 
-    # API Keys (kitty와 공유 가능)
+    # API Keys — .env와 동일한 키 공유
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
 
-    # KIS 실전 (해외주식 — 국내와 동일 계좌)
-    kis_app_key: str = Field(default="", alias="NIGHT_KIS_APP_KEY")
-    kis_app_secret: str = Field(default="", alias="NIGHT_KIS_APP_SECRET")
-    kis_account_number: str = Field(default="", alias="NIGHT_KIS_ACCOUNT_NUMBER")
+    # KIS 실전 — NIGHT_KIS_* 우선, 없으면 KIS_* 사용
+    kis_app_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("NIGHT_KIS_APP_KEY", "KIS_APP_KEY"),
+    )
+    kis_app_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("NIGHT_KIS_APP_SECRET", "KIS_APP_SECRET"),
+    )
+    kis_account_number: str = Field(
+        default="",
+        validation_alias=AliasChoices("NIGHT_KIS_ACCOUNT_NUMBER", "KIS_ACCOUNT_NUMBER"),
+    )
 
-    # KIS 모의
-    kis_paper_app_key: str = Field(default="", alias="NIGHT_KIS_PAPER_APP_KEY")
-    kis_paper_app_secret: str = Field(default="", alias="NIGHT_KIS_PAPER_APP_SECRET")
-    kis_paper_account_number: str = Field(default="", alias="NIGHT_KIS_PAPER_ACCOUNT_NUMBER")
+    # KIS 모의 — NIGHT_KIS_PAPER_* 우선, 없으면 KIS_PAPER_* 사용
+    kis_paper_app_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("NIGHT_KIS_PAPER_APP_KEY", "KIS_PAPER_APP_KEY"),
+    )
+    kis_paper_app_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("NIGHT_KIS_PAPER_APP_SECRET", "KIS_PAPER_APP_SECRET"),
+    )
+    kis_paper_account_number: str = Field(
+        default="",
+        validation_alias=AliasChoices("NIGHT_KIS_PAPER_ACCOUNT_NUMBER", "KIS_PAPER_ACCOUNT_NUMBER"),
+    )
 
-    # Telegram (kitty와 공유)
+    # Telegram — .env와 동일한 키 공유
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
 

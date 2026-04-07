@@ -31,6 +31,7 @@ class NightSellExecutorAgent(NightBaseAgent):
     async def _execute_smart_sell(
         self,
         symbol: str,
+        excd: str,
         quantity: int,
         price: float,
         order_type: str,
@@ -50,7 +51,7 @@ class NightSellExecutorAgent(NightBaseAgent):
         if priority == "HIGH":
             logger.info(f"[Night:SellExecutor] {_label} URGENT stop-loss — market sell {quantity} shares")
             try:
-                order = await self.broker.sell(symbol, quantity, 0)
+                order = await self.broker.sell(symbol, excd, quantity, 0)
                 chunk_results.append({
                     "symbol": symbol,
                     "order_id": order.order_id,
@@ -110,7 +111,7 @@ class NightSellExecutorAgent(NightBaseAgent):
                 try:
                     if attempt == 0 and chunk_price > 0:
                         logger.info(f"[Night:SellExecutor] {chunk_label} limit sell @ ${chunk_price:,.2f}")
-                        order = await self.broker.sell(symbol, chunk_qty, chunk_price)
+                        order = await self.broker.sell(symbol, excd, chunk_qty, chunk_price)
                         order_id = order.order_id
 
                         await asyncio.sleep(10)
@@ -135,7 +136,7 @@ class NightSellExecutorAgent(NightBaseAgent):
                                 logger.info(
                                     f"[Night:SellExecutor] {chunk_label} unfilled ({remaining_qty} remaining) — cancel & retry market"
                                 )
-                                await self.broker.cancel_order(order_id)
+                                await self.broker.cancel_order(order_id, excd, symbol, chunk_qty)
                                 await asyncio.sleep(3)
                                 chunk_price = 0
                         except Exception as e:
@@ -143,7 +144,7 @@ class NightSellExecutorAgent(NightBaseAgent):
                             chunk_price = 0
                     else:
                         logger.info(f"[Night:SellExecutor] {chunk_label} market sell attempt {attempt + 1}")
-                        order = await self.broker.sell(symbol, chunk_qty, 0)
+                        order = await self.broker.sell(symbol, excd, chunk_qty, 0)
                         logger.info(f"[Night:SellExecutor] {chunk_label} market sell submitted")
                         chunk_results.append({
                             "symbol": symbol,
@@ -188,6 +189,7 @@ class NightSellExecutorAgent(NightBaseAgent):
 
         for order in sell_orders:
             symbol = order["symbol"]
+            excd = order.get("excd", "NAS")
             quantity = int(order["quantity"])
             price = float(order.get("price", 0))
             order_type = order.get("order_type", "SINGLE")
@@ -210,7 +212,7 @@ class NightSellExecutorAgent(NightBaseAgent):
 
             try:
                 chunks = await self._execute_smart_sell(
-                    symbol, quantity, price, effective_order_type, priority, name
+                    symbol, excd, quantity, price, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
                 logger.info(f"[Night:SellExecutor] {_label} smart sell done: {len(chunks)} chunks")

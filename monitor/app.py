@@ -59,6 +59,18 @@ NIGHT_AGENT_CONTEXT      = NIGHT_LOG_DIR / "night_agent_context.json"
 NIGHT_AGENTS = ["NightSectorAnalyst", "NightStockPicker", "NightStockEvaluator",
                 "NightAssetManager", "NightBuyExecutor", "NightSellExecutor"]
 
+# ── 로고 이미지 (base64 임베드) ──────────────────────────────────────────────
+import base64 as _b64
+_LOGO_URI = ""
+for _logo_candidate in [
+    Path(__file__).parent.parent / "kitty_logo.png",
+    Path(__file__).parent.parent / "kitty_logo.PNG",
+    Path(__file__).parent / "kitty_logo.png",
+]:
+    if _logo_candidate.exists():
+        _LOGO_URI = "data:image/png;base64," + _b64.b64encode(_logo_candidate.read_bytes()).decode()
+        break
+
 # 모델별 비용 (USD / 1M 토큰)
 _COST: dict[str, tuple[float, float]] = {
     "gpt-4o":               (2.50,  10.00),
@@ -789,7 +801,7 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
 @app.get("/", response_class=HTMLResponse)
 def dashboard(req: Request):
     _auth(req)
-    return _HTML
+    return _HTML.replace("__KITTY_LOGO__", _LOGO_URI)
 
 
 # ── 대시보드 HTML ─────────────────────────────────────────────────────────────
@@ -804,7 +816,8 @@ _HTML = r"""<!DOCTYPE html>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px}
 header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;gap:10px}
-.logo{font-size:15px;font-weight:700;color:#f0f6fc;flex-shrink:0}
+.logo{font-size:15px;font-weight:700;color:#f0f6fc;flex-shrink:0;display:flex;align-items:center;gap:8px}
+.logo-img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:#ffffff;flex-shrink:0;transition:background 0.4s}
 .gnb{display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end}
 .upd{font-size:11px;color:#8b949e;display:flex;align-items:center;gap:5px;flex-shrink:0}
 .dot{width:7px;height:7px;border-radius:50%;background:#3fb950;animation:blink 2s infinite;flex-shrink:0}
@@ -984,14 +997,17 @@ body{padding-bottom:80px}
 .pg-cur{background:#1c4a7a!important;border-color:#58a6ff!important;color:#cae0f9!important;font-weight:700}
 /* 매매일지 분류 배지 */
 .trade-cls{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap}
-.cls-익절{background:#0d3321;color:#3fb950}.cls-손절{background:#2d1010;color:#f85149}
+.cls-익절{background:#3d1010;color:#f85149}.cls-손절{background:#0d1a3d;color:#4493f8}
 .cls-신규매수{background:#0d2d3d;color:#58a6ff}.cls-추가매수{background:#142814;color:#57ab5a}
 .cls-종목교체{background:#2d2500;color:#d29922}.cls-매도{background:#21262d;color:#8b949e}
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">🐱 Kitty Monitor</div>
+  <div class="logo">
+    <img class="logo-img" id="logo-img" src="__KITTY_LOGO__" alt="kitty">
+    <span id="logo-text">🐱 Kitty Monitor</span>
+  </div>
   <div class="gnb">
     <div class="view-switch">
       <button class="view-btn active" id="view-kitty" onclick="switchView('kitty')">🐱 Kitty</button>
@@ -1052,7 +1068,7 @@ body{padding-bottom:80px}
 
 <!-- ══ 에이전트 성적표 (메인) ══ -->
 <div id="tab-agents" class="tab-content active">
-<div class="wrap">
+<div id="agents-kitty" class="wrap">
   <!-- 투자 성향 -->
   <div id="tendency-card" class="tendency-card" style="display:none">
     <div class="tendency-header">
@@ -1100,35 +1116,7 @@ body{padding-bottom:80px}
     </div>
   </div>
 </div>
-</div>
-
-<!-- ══ 토큰 사용량 탭 ══ -->
-<div id="tab-tokens" class="tab-content">
-<div class="wrap">
-  <div class="cards-2">
-    <div class="card"><div class="num blue"  id="tk-in-today">-</div><div class="lbl">오늘 입력 토큰</div></div>
-    <div class="card"><div class="num green" id="tk-out-today">-</div><div class="lbl">오늘 출력 토큰</div></div>
-    <div class="card"><div class="num yellow" id="tk-cost-today">-</div><div class="lbl">오늘 비용 (USD)</div></div>
-    <div class="card"><div class="num gray"  id="tk-cost-14d">-</div><div class="lbl">14일 비용 (USD)</div></div>
-  </div>
-  <div class="section">
-    <div class="sec-title">에이전트별 총 토큰 사용량</div>
-    <div id="tok-agent-bars"></div>
-  </div>
-  <div class="section">
-    <div class="sec-title">14일 일별 토큰 추이</div>
-    <div id="tok-daily-chart"></div>
-    <div style="display:flex;gap:14px;margin-top:8px;font-size:10px;color:#8b949e">
-      <span><span style="display:inline-block;width:10px;height:10px;background:#58a6ff;border-radius:2px;margin-right:4px"></span>입력</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:#3fb950;border-radius:2px;margin-right:4px"></span>출력</span>
-    </div>
-  </div>
-</div>
-</div>
-
-<!-- ══ Night Mode 성적표 ══ -->
-<div id="tab-night" class="tab-content">
-<div class="wrap">
+<div id="agents-night" class="wrap" style="display:none">
   <!-- Night 투자 성향 -->
   <div id="night-tendency-card" class="tendency-card" style="display:none">
     <div class="tendency-header">
@@ -1168,6 +1156,30 @@ body{padding-bottom:80px}
   <div class="section">
     <div class="sec-title">Night Agent Score Heatmap</div>
     <div class="heatmap-wrap"><table class="heatmap" id="nt-heatmap"></table></div>
+  </div>
+</div>
+</div>
+
+<!-- ══ 토큰 사용량 탭 ══ -->
+<div id="tab-tokens" class="tab-content">
+<div class="wrap">
+  <div class="cards-2">
+    <div class="card"><div class="num blue"  id="tk-in-today">-</div><div class="lbl">오늘 입력 토큰</div></div>
+    <div class="card"><div class="num green" id="tk-out-today">-</div><div class="lbl">오늘 출력 토큰</div></div>
+    <div class="card"><div class="num yellow" id="tk-cost-today">-</div><div class="lbl">오늘 비용 (USD)</div></div>
+    <div class="card"><div class="num gray"  id="tk-cost-14d">-</div><div class="lbl">14일 비용 (USD)</div></div>
+  </div>
+  <div class="section">
+    <div class="sec-title">에이전트별 총 토큰 사용량</div>
+    <div id="tok-agent-bars"></div>
+  </div>
+  <div class="section">
+    <div class="sec-title">14일 일별 토큰 추이</div>
+    <div id="tok-daily-chart"></div>
+    <div style="display:flex;gap:14px;margin-top:8px;font-size:10px;color:#8b949e">
+      <span><span style="display:inline-block;width:10px;height:10px;background:#58a6ff;border-radius:2px;margin-right:4px"></span>입력</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:#3fb950;border-radius:2px;margin-right:4px"></span>출력</span>
+    </div>
   </div>
 </div>
 </div>
@@ -1268,19 +1280,13 @@ function switchView(view) {
   _currentView = view;
   document.getElementById('view-kitty').classList.toggle('active', view==='kitty');
   document.getElementById('view-night').classList.toggle('active', view==='night');
-  // Logo update
-  document.querySelector('.logo').textContent = view==='kitty' ? '🐱 Kitty Monitor' : '🌙 Night Monitor';
-  if(view==='kitty') {
-    switchMain('agents');
-    document.querySelectorAll('.tabs .tab, #subtabs').forEach(el => el.style.display='');
-  } else {
-    // night view: hide kitty tabs, show night tab
-    ['errors','tokens','agents','trades'].forEach(n => document.getElementById('tab-'+n).classList.remove('active'));
-    document.getElementById('tab-night').classList.add('active');
-    document.querySelectorAll('.tabs').forEach(el => el.style.display='none');
-    document.getElementById('subtabs').style.display='none';
-    loadNightTendency(); loadNightPortfolio(); loadNightAgentScores();
-  }
+  document.getElementById('logo-text').textContent = view==='kitty' ? '🐱 Kitty Monitor' : '🌙 Night Monitor';
+  document.getElementById('logo-img').style.background = view==='night' ? '#000000' : '#ffffff';
+  // 현재 활성 탭을 그대로 유지하되 내용을 새 view에 맞게 리로드
+  const activeMain = ['agents','trades','admin'].find(t =>
+    document.getElementById('main-tab-'+t)?.classList.contains('active')
+  ) || 'agents';
+  switchMain(activeMain);
 }
 
 // ── 탭 전환 ─────────────────────────────────────────────
@@ -1292,12 +1298,20 @@ function switchMain(name) {
     if(el) el.classList.toggle('active', t===name);
   });
   document.getElementById('subtabs').style.display = name==='admin' ? 'flex' : 'none';
-  ['errors','tokens','agents','night','trades'].forEach(n => {
+  ['errors','tokens','agents','trades'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
   if(name === 'agents') {
     document.getElementById('tab-agents').classList.add('active');
-    loadTendency(); loadPortfolio(); loadAgentScores();
+    if(_currentView === 'night') {
+      document.getElementById('agents-kitty').style.display = 'none';
+      document.getElementById('agents-night').style.display = '';
+      loadNightTendency(); loadNightPortfolio(); loadNightAgentScores();
+    } else {
+      document.getElementById('agents-kitty').style.display = '';
+      document.getElementById('agents-night').style.display = 'none';
+      loadTendency(); loadPortfolio(); loadAgentScores();
+    }
   } else if(name === 'trades') {
     document.getElementById('tab-trades').classList.add('active');
     loadTrades();
@@ -1313,9 +1327,11 @@ function switchAdmin(name) {
     document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
   document.getElementById('tab-agents').classList.remove('active');
-  document.getElementById('tab-night').classList.remove('active');
   if(name==='errors'){ loadStats(); loadErrors(); }
-  if(name==='tokens') loadTokens();
+  if(name==='tokens'){
+    if(_currentView === 'night') loadNightTokens();
+    else loadTokens();
+  }
 }
 
 // ── 채팅 팝업 ────────────────────────────────────────────
@@ -1525,7 +1541,7 @@ async function loadPortfolio() {
   try {
     const d = await fetch('/api/portfolio').then(r=>r.json());
     const fmtW = n => n.toLocaleString('ko-KR');
-    const pnlColor = n => n>=0?'#3fb950':'#f85149';
+    const pnlColor = n => n>=0?'#f85149':'#4493f8';  // 한국 기준: 상승=빨강, 하락=파랑
 
     // GNB 셀렉터 동기화
     if(d.trading_mode) {
@@ -1616,6 +1632,44 @@ async function loadAgentScores() {
 }
 
 // ── 토큰 탭 ─────────────────────────────────────────────
+async function loadNightTokens() {
+  try {
+    const d = await fetch('/api/night/token-usage').then(r=>r.json());
+    document.getElementById('tk-in-today').textContent   = fmtNum(d.today?.in||0);
+    document.getElementById('tk-out-today').textContent  = fmtNum(d.today?.out||0);
+    document.getElementById('tk-cost-today').textContent = '$'+((d.today?.cost)||0).toFixed(4);
+    const total14 = Object.values(d.daily||{}).reduce((a,v)=>a+(v.cost||0),0);
+    document.getElementById('tk-cost-14d').textContent   = '$'+total14.toFixed(4);
+    const agents = Object.entries(d.by_agent||{}).sort((a,b)=>(b[1].in+b[1].out)-(a[1].in+a[1].out));
+    const maxTok = Math.max(1,...agents.map(([,v])=>v.in+v.out));
+    document.getElementById('tok-agent-bars').innerHTML = agents.length ? agents.map(([agent,v])=>{
+      const total = v.in + v.out;
+      return `<div class="tok-bar-row">
+        <div class="tok-name" title="${agent}">${agent.replace('Night','')}</div>
+        <div class="tok-track">
+          <div class="tok-in"  style="width:${v.in/maxTok*100}%"></div>
+          <div class="tok-out" style="width:${v.out/maxTok*100}%"></div>
+        </div>
+        <div class="tok-val">${fmtNum(total)}<span style="color:#484f58;font-size:9px"> $${v.cost.toFixed(3)}</span></div>
+      </div>`;
+    }).join('') : '<div class="empty">Night 토큰 데이터 없음</div>';
+    const dates = d.dates || [];
+    const maxDayTok = Math.max(1,...dates.map(dt=>(d.daily[dt]?.in||0)+(d.daily[dt]?.out||0)));
+    document.getElementById('tok-daily-chart').innerHTML = dates.map(dt=>{
+      const v = d.daily[dt] || {in:0,out:0,cost:0};
+      const total = v.in+v.out;
+      return `<div class="bar-row">
+        <div class="bar-dt">${dt.slice(5)}</div>
+        <div class="bar-track">
+          <div class="tok-in"  style="width:${v.in/maxDayTok*100}%"></div>
+          <div class="tok-out" style="width:${v.out/maxDayTok*100}%"></div>
+        </div>
+        <div class="bar-n">${fmtNum(total)}</div>
+      </div>`;
+    }).join('');
+  } catch(e){ console.error('night-tokens',e); }
+}
+
 async function loadTokens() {
   try {
     const d = await fetch('/api/token-usage').then(r=>r.json());
@@ -1834,7 +1888,7 @@ function renderTradesPage() {
   tbody.innerHTML = slice.map(t => {
     const clsCss = 'trade-cls cls-'+t.classify;
     const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(1)+'%' : '-';
-    const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#3fb950':'#f85149';
+    const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';  // 한국 기준: 상승=빨강, 하락=파랑
     const priceStr = t.price ? Number(t.price).toLocaleString() : '-';
     const srcIcon = t.source==='night' ? '🌙' : '🐱';
     const shortReason = t.reason ? (t.reason.length>50?t.reason.slice(0,50)+'…':t.reason) : '-';
@@ -1998,28 +2052,26 @@ async function loadNightAgentScores() {
 }
 
 // ── 초기화 & 자동 갱신 ──────────────────────────────────
-// 기본 뷰: 성적표
-loadTendency();
-loadPortfolio();
-loadAgentScores();
+switchMain('agents');
 
 // 60초 자동 갱신
 setInterval(()=>{
   if(document.getElementById('tab-agents').classList.contains('active')){
-    loadPortfolio(); loadAgentScores();
-  }
-  if(document.getElementById('tab-night').classList.contains('active')){
-    loadNightPortfolio(); loadNightAgentScores();
+    if(_currentView === 'night'){ loadNightPortfolio(); loadNightAgentScores(); }
+    else { loadPortfolio(); loadAgentScores(); }
   }
   if(document.getElementById('tab-trades').classList.contains('active')){
-    loadTrades(false); // 자동 갱신 시 현재 페이지 유지
+    loadTrades(false);
   }
 }, 60000);
 
 // 관리 탭 30초 자동 갱신
 setInterval(()=>{
   if(document.getElementById('tab-errors').classList.contains('active')){ loadStats(); loadErrors(); }
-  if(document.getElementById('tab-tokens').classList.contains('active')) loadTokens();
+  if(document.getElementById('tab-tokens').classList.contains('active')){
+    if(_currentView === 'night') loadNightTokens();
+    else loadTokens();
+  }
 }, 30000);
 </script>
 </body>

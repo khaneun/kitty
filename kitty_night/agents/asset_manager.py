@@ -49,6 +49,7 @@ Output format: JSON
       "action": "BUY|SELL|PARTIAL_SELL",
       "symbol": "TICKER",
       "name": "Company Name",
+      "excd": "NAS|NYS|AMS|HKS|TSE|SHS|SHI",
       "quantity": shares,
       "price": 0,
       "order_type": "SPLIT|SINGLE",
@@ -62,6 +63,12 @@ Output format: JSON
   },
   "summary": "Asset management strategy summary"
 }
+
+excd (exchange code):
+- NAS: NASDAQ
+- NYS: NYSE
+- AMS: AMEX
+- Default to NAS if unsure
 
 order_type:
 - SPLIT: split order (quantity > 10 shares or low-liquidity stock)
