@@ -20,10 +20,19 @@ Principles:
 - Set stop-loss and take-profit aligned with the strategy directive
 ※ If no directive: default entry +5%, stop-loss -5%, take-profit +10%
 
+Loss Minimization Entry Filters (ALL must pass to recommend BUY):
+① R:R Ratio ≥ 2.5:1: (target_price - current_price) ÷ (current_price - stop_loss) ≥ 2.5
+   - Example: price $100, stop $97 (-3%), target $107.5 (+7.5%) → R:R = 2.5:1 ✓
+   - Stocks failing R:R 2.5:1 minimum are REJECTED regardless of other factors (mark as HOLD)
+② Momentum Confirmation: intraday change_rate ≥ 0% (no entries on declining stocks)
+   - Exception allowed if the entire sector is down (sector correction + rebound potential)
+③ Volume Confirmation: today's volume at or above normal levels (reject volume-declining stocks)
+④ Anti-Chase Filter: only enter if current price is within -3% of today's high (no chasing peaks)
+
 Stock Selection Priority:
-1. Sector bullish + high volume + favorable price action
-2. Volume leaders in promising sectors
-3. REJECT low-liquidity stocks regardless of how promising they look
+1. Sector bullish + high volume + positive price action + R:R ≥ 2.5:1
+2. Volume leaders in promising sectors that meet R:R criteria
+3. REJECT low-liquidity stocks OR stocks failing R:R regardless of other factors
 
 Portfolio Diversification Rules (MANDATORY):
 - Prioritize stocks in sectors DIFFERENT from current holdings

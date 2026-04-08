@@ -2,6 +2,127 @@
 
 ---
 
+## v2.2.0 — 2026-04-09
+
+### 손실 최소화 전략 강화 — 익절 확대 + 다층 손절 시스템
+
+손실 폭 최소화와 수익 극대화를 동시에 달성하기 위한 전략 체계 전면 강화.
+6개 파일(tendency × 2, stock_evaluator × 2, asset_manager × 2, stock_picker × 2)에 걸쳐 적용.
+
+#### 투자 성향 레벨값 조정 (`kitty/agents/tendency.py`, `kitty_night/agents/tendency.py`)
+
+**익절(take_profit) 목표 상향 — 수익을 더 오래 추적**
+
+| 레벨 | 이전 (KR) | 이후 (KR) | Night |
+|------|----------|----------|-------|
+| L1 | +3% | **+5%** | +5% |
+| L2 | +5% | **+8%** | +8% |
+| L3 | +7% | **+12%** | +12% |
+| L4 | +12% | **+18%** | +18% |
+| L5 | +18% | **+25%** | +28% |
+| L6 | +25% | **+35%** | +40% |
+
+**손절(stop_loss) 임계값 촘촘하게 조정 — 손실 폭 감소**
+
+| 레벨 | 이전 (KR) | 이후 (KR) | Night |
+|------|----------|----------|-------|
+| L1 | -2.0% | **-1.5%** | -1.5% |
+| L2 | -3.0% | **-2.5%** | -2.5% |
+| L3 | -4.0% | **-3.5%** | -4.0% |
+| L4 | -6.0% | **-5.0%** | -6.0% |
+| L5 | -9.0% | **-7.5%** | -8.5% |
+| L6 | -13.0% | **-10.0%** | -12.0% |
+
+**프리셋 손익비(R:R) 개선**
+
+| 프리셋 | TP | SL | R:R (이전) | R:R (이후) |
+|--------|----|----|-----------|-----------|
+| aggressive | +8% | -2.5% | 1.67:1 | **3.2:1** |
+| balanced | +12% | -3.5% | 2.0:1 | **3.4:1** |
+| conservative | +25% | -3.5% | 4.5:1 | **7.1:1** |
+
+#### 다층 손절 지침 추가 (`_build_directive()`)
+
+에이전트에 주입되는 투자 성향 지침에 6가지 손실 최소화 기술 규칙 추가:
+
+① **소프트 스탑 (조기 경고)**: 손절 임계치 50% 지점에서 섹터 약세이면 즉시 PARTIAL_SELL 실행
+② **하드 스탑**: 손절 임계치 초과 시 PARTIAL_SELL ~50% 무조건 실행 (예외 없음)
+③ **비상 스탑**: 손절 기준 2배 초과 또는 하한가 근접 시 전량 SELL
+④ **트레일링 스탑**: TP 목표의 50% 달성 후 40%를 반납하면 PARTIAL_SELL로 수익 보전
+⑤ **거래량 모멘텀 이탈**: 당일 -1.5% 이하 + 섹터 neutral/bearish → 손절 전이라도 PARTIAL_SELL 고려
+⑥ **손익비 원칙**: 신규 매수 종목은 예상 TP÷SL ≥ 2.5:1 이상만 허용
+
+#### Stock Evaluator 기술지표 기반 조기 청산 (`kitty/agents/stock_evaluator.py`, `kitty_night/agents/stock_evaluator.py`)
+
+- 기존 수익률 기반 판단에 "기술지표 기반 조기 청산" 섹션 추가 (평가 기준 2번)
+- 정체 판단 기준 강화: ±1% → **±0.5%** (엄격한 기회비용 판단)
+- 섹터별 분기 조건도 ±0.5% 기준으로 통일
+- 거래량 모멘텀 이탈 신호(`change_rate_today ≤ -1.5%` + 섹터 약세) 시 조기 청산 권고
+
+#### Asset Manager 손실 트리아지 + 자본보호 모드 (`kitty/agents/asset_manager.py`, `kitty_night/agents/asset_manager.py`)
+
+- **손실 트리아지**: 복수 종목 동시 손절 시 손실률 최악 종목부터 우선 처리
+- **자본보호 모드**: 포트폴리오 합산 손실 -3% 이상이면 신규 매수 전면 중단, 손절·소프트스탑 최우선 실행
+- **신규 매수 품질 게이트**: R:R ≥ 2.5:1 미달 종목 승인 거부
+- **포트폴리오 손실 중 매수 제한**: 합산 손실 -3% 이상 상태에서 신규 매수 시 주문금액 50% 상한
+- 주문 우선순위 4단계 → **7단계**로 세분화 (비상 스탑 → 하드 스탑 → 소프트 스탑 → 교체 매도 → 익절 → 신규 매수 → BUY_MORE)
+- 교체 기준 정체 범위도 ±0.5%로 강화
+
+#### Stock Picker 진입 필터 강화 (`kitty/agents/stock_picker.py`, `kitty_night/agents/stock_picker.py`)
+
+- **R:R ≥ 2.5:1 필터**: 계산값 미달 시 BUY → HOLD로 표기
+- **모멘텀 확인**: 당일 등락률 0% 이상인 종목만 신규 진입 (하락 중 진입 금지)
+- **거래량 가속 필터**: 거래량 급감 종목 제외
+- **추격매수 방지**: 당일 고점 대비 -2~3% 이내 구간에서만 진입 허용
+
+---
+
+## v2.1.0 — 2026-04-09
+
+### Night Mode 포트폴리오 평가 버그 수정
+
+`/night`, `/nportfolio` 명령에서 Total value, P&L, CASH가 모두 0으로 표시되던 버그 수정.
+
+**원인** (`kitty_night/broker/kis_overseas.py`)
+
+`get_balance()`가 KIS API 원본 JSON을 그대로 반환하고 있었음:
+```
+return resp.json()  # {"output1": [...보유종목...], "output2": [...요약...]}
+```
+
+`main.py`에서는 `balance_data.get("holdings", [])` 로 읽으므로 `"holdings"` 키가 없어 항상 빈 리스트 반환.
+→ 보유종목 0개, total_eval = available_usd만 반영, total_pnl = 0, 포트폴리오 스냅샷 공백.
+
+**수정** (`kitty_night/broker/kis_overseas.py`)
+
+`get_balance()`에서 `output1`을 순회하여 정규화된 `holdings` 리스트로 변환 후 반환:
+
+```python
+return {
+    "holdings": [
+        {
+            "symbol": item["ovrs_pdno"],
+            "name": item["ovrs_item_name"],
+            "excd": item["ovrs_excg_cd"],
+            "quantity": int(item["ovrs_cblc_qty"]),
+            "avg_price": float(item["pchs_avg_pric"]),
+            "current_price": float(item["now_pric2"]) or avg_price,
+            "eval_amount": float(item["ovrs_stck_evlu_amt"]),  # 0이면 가격×수량으로 추정
+            "pnl_amount": float(item["frcr_evlu_pfls_amt"]),   # 0이면 (현재가-평균가)×수량으로 추정
+            "pnl_rate": float(item["evlu_pfls_rt"]),
+        }
+        for item in output1 if int(item["ovrs_cblc_qty"]) > 0
+    ],
+    "output2": data["output2"],
+}
+```
+
+- 0수량 항목 자동 필터링
+- `eval_amount`/`pnl_amount`가 0인 경우 현재가 기반 추정값으로 fallback
+- `telegram/bot.py`의 `_cmd_nportfolio()`에서 읽는 필드명(`quantity`, `avg_price`, `eval_amount`, `pnl_rate`)과 완전 일치
+
+---
+
 ## v2.0.0 — 2026-04-03
 
 ### 🌙 Night Mode — 미국주식 자동 매매 시스템

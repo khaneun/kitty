@@ -35,8 +35,10 @@ DIM_LABELS: dict[str, str] = {
 # ── 6-level values (L1 = most aggressive, L6 = most conservative) ─────────
 
 LEVEL_VALUES: dict[str, dict[int, float]] = {
-    "take_profit": {1: 3.0, 2: 5.0, 3: 8.0, 4: 14.0, 5: 22.0, 6: 30.0},
-    "stop_loss":   {1: -2.0, 2: -3.5, 3: -5.0, 4: -7.5, 5: -11.0, 6: -15.0},
+    # take_profit: expanded targets to ride momentum longer, improve R:R ratio
+    "take_profit": {1: 5.0, 2: 8.0, 3: 12.0, 4: 18.0, 5: 28.0, 6: 40.0},
+    # stop_loss: tighter thresholds at every level to minimize downside
+    "stop_loss":   {1: -1.5, 2: -2.5, 3: -4.0, 4: -6.0, 5: -8.5, 6: -12.0},
     "cash":        {1: 0.10, 2: 0.18, 3: 0.25, 4: 0.35, 5: 0.48, 6: 0.60},
     "max_weight":  {1: 40.0, 2: 30.0, 3: 22.0, 4: 17.0, 5: 13.0, 6: 10.0},
     "entry":       {1: 10.0, 2: 6.0, 3: 4.0, 4: 2.5, 5: 1.5, 6: 0.5},
@@ -54,14 +56,29 @@ LEVEL_LABEL: dict[int, str] = {
 _INITIAL_LEVELS: dict[str, int] = {dim: 2 for dim in DIMS}
 
 PRESETS: dict[str, dict[str, int]] = {
+    # Higher TP target + tight SL — R:R 3.2:1
     "aggressive": {
-        "take_profit": 2, "stop_loss": 2, "cash": 2, "max_weight": 2, "entry": 2,
+        "take_profit": 2,  # +8%
+        "stop_loss":   2,  # -2.5%
+        "cash":        2,  # 18%
+        "max_weight":  2,  # 30%
+        "entry":       2,  # +6%
     },
+    # Balanced with improved R:R — R:R 3.4:1
     "balanced": {
-        "take_profit": 4, "stop_loss": 4, "cash": 4, "max_weight": 4, "entry": 3,
+        "take_profit": 3,  # +12%
+        "stop_loss":   3,  # -4%
+        "cash":        4,  # 35%
+        "max_weight":  4,  # 17%
+        "entry":       3,  # +4%
     },
+    # Wide TP + tight SL, high cash — R:R 7.1:1
     "conservative": {
-        "take_profit": 5, "stop_loss": 3, "cash": 5, "max_weight": 5, "entry": 5,
+        "take_profit": 5,  # +28%
+        "stop_loss":   3,  # -4%
+        "cash":        5,  # 48%
+        "max_weight":  5,  # 13%
+        "entry":       5,  # +1.5%
     },
 }
 
@@ -130,6 +147,9 @@ def _build_directive(levels: dict[str, int], rationale: str = "") -> str:
     else:
         principle = "Apply each dimension's criteria strictly. Execute by the rules when criteria aren't met."
 
+    soft_sl = round(sl * 0.5, 2)        # soft stop: 50% of hard stop threshold
+    trail_trigger = round(tp * 0.5, 1)  # trailing stop activates after 50% of TP target
+
     rationale_line = f"\n• Rationale: {rationale}" if rationale else ""
 
     return f"""[Trading Strategy Directive — {overall_label}]
@@ -140,7 +160,18 @@ Apply these per-dimension criteria with higher priority than default rules.
 • Cash Reserve (L{ca_lv} {LEVEL_LABEL[ca_lv]}): Maintain at least {ca}% cash. Never go below {ca}% even on strong buy signals.
 • Max Weight (L{mw_lv} {LEVEL_LABEL[mw_lv]}): Single stock max {mw}% of portfolio. High-conviction picks may concentrate up to this limit.
 • Entry (L{en_lv} {LEVEL_LABEL[en_lv]}): Only enter stocks with intraday change ≤+{en}%. {en_cond}.
-• Principle: {principle}{rationale_line}"""
+• Principle: {principle}{rationale_line}
+
+[Loss Minimization Technical Rules — MANDATORY]
+① Soft Stop (Early Warning): At -{soft_sl}% unrealized loss, begin PARTIAL_SELL evaluation.
+   - Sector bullish + clearly temporary dip → HOLD allowed, but MUST re-evaluate next cycle.
+   - Sector neutral/bearish → Execute PARTIAL_SELL immediately. Do NOT wait for hard stop.
+② Hard Stop (Mandatory Cut): At -{sl}% loss exceeded → PARTIAL_SELL ~50% unconditionally. No exceptions.
+③ Emergency Stop (Full Exit): At -{round(sl*2, 1)}% loss (2× hard stop) or circuit breaker proximity → Full SELL.
+④ Trailing Stop (Profit Protection): If peak unrealized gain reached +{trail_trigger}% and current gain fell below +{round(trail_trigger*0.4, 1)}% → execute PARTIAL_SELL to lock in profits.
+   - Capture momentum gains. Fading momentum = exit signal. Re-entry possible on next setup.
+⑤ Volume Momentum Exit: If intraday change_rate ≤-1.5% AND sector is neutral/bearish → consider PARTIAL_SELL even before hard stop.
+⑥ R:R Minimum for New Entries: Only approve new buys where expected TP/SL ratio ≥ 2.5:1."""
 
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
@@ -153,12 +184,13 @@ the next session's investment levels across 5 independent dimensions.
 
 ── 5 Dimensions × 6 Levels ──────────────────────────────
 
-■ Take Profit: profit-taking speed
-  L1(+3%) L2(+5%) L3(+8%) L4(+14%) L5(+22%) L6(+30%)
+■ Take Profit: profit target — higher level = longer ride for more gains
+  L1(+5%) L2(+8%) L3(+12%) L4(+18%) L5(+28%) L6(+40%)
 
-■ Stop Loss: loss-cutting speed
-  L1(-2%) L2(-3.5%) L3(-5%) L4(-7.5%) L5(-11%) L6(-15%)
+■ Stop Loss: loss-cutting speed — lower level (L1) = faster cut
+  L1(-1.5%) L2(-2.5%) L3(-4%) L4(-6%) L5(-8.5%) L6(-12%)
   ※ L1 = fastest cut, L6 = most tolerant
+  ※ Use 50% of stop threshold as soft stop (early warning system)
 
 ■ Cash Reserve: minimum cash ratio
   L1(10%) L2(18%) L3(25%) L4(35%) L5(48%) L6(60%)

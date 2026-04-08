@@ -203,7 +203,20 @@ class KISOverseasBroker:
     # ── 잔고 조회 ────────────────────────────────────────────────────────────
 
     async def get_balance(self) -> dict[str, Any]:
-        """해외주식 잔고 조회"""
+        """해외주식 잔고 조회 — 정규화된 holdings 포함하여 반환
+
+        반환 형식:
+          {
+            "holdings": [
+              {
+                "symbol": str, "name": str, "excd": str,
+                "quantity": int, "avg_price": float, "current_price": float,
+                "eval_amount": float, "pnl_amount": float, "pnl_rate": float,
+              }, ...
+            ],
+            "output2": <원본 output2>,  # 계좌 요약 (필요시 참조)
+          }
+        """
         tr_id = _BALANCE_TR[self._mode]
         headers = await self._headers(tr_id)
         resp = await self._client.get(
@@ -219,7 +232,42 @@ class KISOverseasBroker:
             },
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+
+        # output1 → 정규화된 holdings 변환
+        holdings: list[dict[str, Any]] = []
+        for item in data.get("output1", []):
+            qty = int(float(item.get("ovrs_cblc_qty", 0)))
+            if qty <= 0:
+                continue
+            avg_price    = float(item.get("pchs_avg_pric", 0))
+            current_price = float(item.get("now_pric2", 0)) or avg_price
+            eval_amount  = float(item.get("ovrs_stck_evlu_amt", 0))
+            pnl_amount   = float(item.get("frcr_evlu_pfls_amt", 0))
+            pnl_rate     = float(item.get("evlu_pfls_rt", 0))
+            # eval_amount가 0이면 현재가 × 수량으로 추정
+            if eval_amount == 0 and current_price > 0:
+                eval_amount = current_price * qty
+            # pnl_amount가 0이면 (현재가 - 평균단가) × 수량으로 추정
+            if pnl_amount == 0 and avg_price > 0:
+                pnl_amount = (current_price - avg_price) * qty
+            holdings.append({
+                "symbol":        item.get("ovrs_pdno", ""),
+                "name":          item.get("ovrs_item_name", ""),
+                "excd":          item.get("ovrs_excg_cd", "NAS"),
+                "quantity":      qty,
+                "avg_price":     avg_price,
+                "current_price": current_price,
+                "eval_amount":   eval_amount,
+                "pnl_amount":    pnl_amount,
+                "pnl_rate":      pnl_rate,
+            })
+
+        logger.info(f"[Night:KIS] balance: {len(holdings)} holdings")
+        return {
+            "holdings": holdings,
+            "output2":  data.get("output2", []),
+        }
 
     async def get_available_usd(self) -> float:
         """해외주식 주문 가능 USD 금액 조회"""

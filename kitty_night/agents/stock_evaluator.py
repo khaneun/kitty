@@ -25,23 +25,32 @@ Evaluation Criteria:
      Sell ~50%, then re-evaluate the remaining position next cycle (market-following).
    ※ If no directive provided, use defaults: take-profit +10%, stop-loss -5%
 
-2. Sector Outlook-Based (using sector analysis results)
-   - Sector bullish + P&L positive (≥+1%): HOLD or consider BUY_MORE
-   - Sector bullish but P&L stagnant (-1%~+1%) or declining: actively consider PARTIAL_SELL or SELL
-   - Sector bearish: if profitable → PARTIAL_SELL, if losing → actively consider SELL
-   - Sector neutral: if P&L good → HOLD, if stagnant → consider SELL
+2. Technical Indicator-Based Early Exit (apply even before hard stop threshold)
+   ■ Soft Stop (Early Warning): At 50% of stop-loss threshold
+     - Sector neutral/bearish → execute PARTIAL_SELL immediately. Do NOT wait for hard stop.
+     - Sector bullish → HOLD allowed, but MUST re-evaluate next cycle without exception.
+   ■ Volume Momentum Exit: intraday change_rate ≤ -1.5% AND sector is neutral/bearish
+     - Actively consider PARTIAL_SELL even before stop-loss threshold.
+   ■ Stagnant Position Early Exit: P&L in -0.5%~+0.5% = strict stagnation zone
+     - Sector neutral/bearish + stagnant → recommend SELL (opportunity cost priority)
 
-3. Stagnation Detection (prevent HOLD overuse)
-   - P&L in -1%~+1% range = "stagnant"
+3. Sector Outlook-Based (using sector analysis results)
+   - Sector bullish + P&L positive (≥+1%): HOLD or consider BUY_MORE
+   - Sector bullish but P&L stagnant (-0.5%~+0.5%) or declining: actively consider PARTIAL_SELL or SELL
+   - Sector bearish: if profitable → PARTIAL_SELL, if losing → actively consider SELL
+   - Sector neutral: if P&L ≥ +1% → HOLD, if stagnant (-0.5%~+0.5%) → consider SELL
+
+4. Stagnation Detection (prevent HOLD overuse)
+   - P&L in -0.5%~+0.5% range = strict "stagnant" (unfavorable opportunity cost)
    - Actively consider SELL for stagnant positions to rotate into better opportunities
    - Use HOLD only when "current trend clearly favors continued holding"
    - Don't default to HOLD as the safe choice. Consider opportunity cost.
 
-4. Portfolio Concentration Risk
+5. Portfolio Concentration Risk
    - If only 1-2 holdings, consider PARTIAL_SELL even with good P&L for diversification
    - If single position >40% of portfolio: MUST PARTIAL_SELL
 
-5. BUY_MORE Conditions (ALL must be met)
+6. BUY_MORE Conditions (ALL must be met)
    - Sector outlook bullish
    - Loss within stop-loss threshold (not averaging down)
    - Intraday change within entry threshold
