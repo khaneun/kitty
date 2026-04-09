@@ -1128,9 +1128,9 @@ body{padding-bottom:80px}
     <div class="pf-wrap">
       <table class="pf">
         <thead><tr>
-          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률</th><th>평가금액</th>
+          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률</th><th>손익금액</th><th>평가금액</th>
         </tr></thead>
-        <tbody id="pf-tbody"><tr><td colspan="6" class="empty">로딩 중...</td></tr></tbody>
+        <tbody id="pf-tbody"><tr><td colspan="7" class="empty">로딩 중...</td></tr></tbody>
       </table>
     </div>
     <div style="font-size:10px;color:#484f58;margin-top:6px;text-align:right" id="pf-ts"></div>
@@ -1590,19 +1590,23 @@ async function loadPortfolio() {
 
     const tbody = document.getElementById('pf-tbody');
     if(!d.holdings || !d.holdings.length){
-      tbody.innerHTML='<tr><td colspan="6" class="empty">보유 종목 없음</td></tr>';
+      tbody.innerHTML='<tr><td colspan="7" class="empty">보유 종목 없음</td></tr>';
       return;
     }
     tbody.innerHTML = d.holdings.map(h=>{
       const color = pnlColor(h.pnl_rt);
       const arrow = h.pnl_rt>=0?'▲':'▼';
+      // pnl_amt: KIS 직접 제공값 우선, 없으면 eval_amt - avg*qty 계산
+      const pnlAmt = h.pnl_amt != null ? h.pnl_amt : (h.eval_amt - h.avg * h.qty);
+      const pnlAmtStr = (pnlAmt>=0?'+':'')+pnlAmt.toLocaleString()+'원';
       return `<tr>
         <td><div class="pf-name">${esc(h.name)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
         <td>${h.qty.toLocaleString()}</td>
         <td>${h.avg.toLocaleString()}</td>
         <td>${h.current.toLocaleString()}</td>
-        <td style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}</td>
-        <td style="color:${color}">${h.eval_amt.toLocaleString()}원</td>
+        <td style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
+        <td style="color:${color};font-weight:600">${pnlAmtStr}</td>
+        <td>${h.eval_amt.toLocaleString()}원</td>
       </tr>`;
     }).join('');
   } catch(e){ console.error('portfolio',e); }

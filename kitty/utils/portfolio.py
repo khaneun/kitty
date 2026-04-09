@@ -42,12 +42,13 @@ async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> N
                 qty      = int(h.get("hldg_qty", 0))
                 avg      = int(float(h.get("pchs_avg_pric", 0)))
                 eval_amt = int(h.get("evlu_amt", 0))
+                pnl_amt  = int(h.get("evlu_pfls_amt", 0))   # KIS 평가손익금액 (원)
                 pnl_rt   = float(h.get("evlu_pfls_rt", 0))
                 cur      = int(eval_amt / qty) if qty else 0
                 arrow    = "▲" if pnl_rt >= 0 else "▼"
                 logger.info(
                     f"{prefix}{symbol:<8}  {name:<14}  {qty:>6,}주  {avg:>10,}원  "
-                    f"{cur:>10,}원  {arrow}{abs(pnl_rt):>6.2f}%  {eval_amt:>12,}원"
+                    f"{cur:>10,}원  {arrow}{abs(pnl_rt):>6.2f}%  {pnl_amt:>+,}원  {eval_amt:>12,}원"
                 )
                 holding_list.append({
                     "symbol":   symbol,
@@ -56,6 +57,7 @@ async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> N
                     "avg":      avg,
                     "current":  cur,
                     "eval_amt": eval_amt,
+                    "pnl_amt":  pnl_amt,
                     "pnl_rt":   pnl_rt,
                 })
 

@@ -317,14 +317,17 @@ async def run_trading_cycle(
     _save_agent_context("매수실행가", {"buy_results": buy_results})
     _save_agent_context("매도실행가", {"sell_results": sell_results})
 
-    # 텔레그램 체결 보고
+    # 텔레그램 체결 보고 (시장가 주문은 quote 가격을 참조 가격으로 사용)
+    quote_map = {q["symbol"]: q for q in quotes}
     for r in buy_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
-            await reporter.report_trade("BUY", r["symbol"], r["quantity"], r.get("price", 0), "전략 매수")
+            price = r.get("price") or int(quote_map.get(r["symbol"], {}).get("current_price", 0))
+            await reporter.report_trade("BUY", r["symbol"], r["quantity"], price, "전략 매수")
 
     for r in sell_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
-            await reporter.report_trade("SELL", r["symbol"], r["quantity"], r.get("price", 0), "전략 매도")
+            price = r.get("price") or int(quote_map.get(r["symbol"], {}).get("current_price", 0))
+            await reporter.report_trade("SELL", r["symbol"], r["quantity"], price, "전략 매도")
 
     daily_report.end_cycle()
     reporter.mark_cycle_done()

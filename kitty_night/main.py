@@ -263,14 +263,17 @@ async def run_trading_cycle(
     _save_agent_context("NightBuyExecutor", {"buy_results": buy_results})
     _save_agent_context("NightSellExecutor", {"sell_results": sell_results})
 
-    # Telegram trade reports
+    # Telegram trade reports (market orders fall back to quote reference price)
+    night_quote_map = {q["symbol"]: q for q in quotes}
     for r in sell_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
-            await reporter.report_trade("SELL", r["symbol"], r["quantity"], r.get("price", 0), "Night strategy")
+            price = r.get("price") or float(night_quote_map.get(r["symbol"], {}).get("current_price", 0))
+            await reporter.report_trade("SELL", r["symbol"], r["quantity"], price, "Night strategy")
 
     for r in buy_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
-            await reporter.report_trade("BUY", r["symbol"], r["quantity"], r.get("price", 0), "Night strategy")
+            price = r.get("price") or float(night_quote_map.get(r["symbol"], {}).get("current_price", 0))
+            await reporter.report_trade("BUY", r["symbol"], r["quantity"], price, "Night strategy")
 
     daily_report.end_cycle()
     logger.info("=== Night Trading Cycle Complete ===")
