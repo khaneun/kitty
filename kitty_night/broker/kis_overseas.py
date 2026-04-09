@@ -44,6 +44,27 @@ class OverseasOrderResult(BaseModel):
     timestamp: datetime
 
 
+# ── 거래소 코드 변환 (3-char quote API → 4-char order/balance API) ─────────────
+
+_EXCD_MAP: dict[str, str] = {
+    "NAS": "NASD",
+    "NYS": "NYSE",
+    "AMS": "AMEX",
+    "HKS": "SEHK",
+    "TSE": "TKSE",
+    "SHS": "SHAA",
+    "SZS": "SZAA",
+    "HSX": "VNSE",
+}
+
+
+def _to_order_excd(excd: str) -> str:
+    """시세 조회용 3-char excd → 주문/잔고 API용 4-char excd 변환.
+    이미 4-char이거나 알 수 없는 코드는 그대로 반환.
+    """
+    return _EXCD_MAP.get(excd.upper(), excd)
+
+
 # ── TR 코드 ───────────────────────────────────────────────────────────────────
 
 # 시세 조회 (실전/모의 공통)
@@ -246,7 +267,7 @@ class KISOverseasBroker:
                 params={
                     "CANO": self._cano,
                     "ACNT_PRDT_CD": self._acnt_prdt_cd,
-                    "OVRS_EXCG_CD": "NASD",
+                    "OVRS_EXCG_CD": "",   # 전 거래소 조회 (빈 문자열 = all exchanges)
                     "TR_CRCY_CD": "USD",
                     "CTX_AREA_FK200": "",
                     "CTX_AREA_NK200": "",
@@ -255,6 +276,12 @@ class KISOverseasBroker:
 
         resp = await self._call_with_retry(_req, "해외잔고조회")
         data = resp.json()
+        if data.get("rt_cd") != "0":
+            logger.error(
+                f"[Night:KIS] 잔고조회 실패 rt_cd={data.get('rt_cd')} "
+                f"msg={data.get('msg1')} msg_cd={data.get('msg_cd')}"
+            )
+            return {"holdings": [], "output2": []}
 
         # output1 → 정규화된 holdings 변환
         holdings: list[dict[str, Any]] = []
@@ -332,11 +359,12 @@ class KISOverseasBroker:
         tr_id = _BUY_TR[self._mode]
         ord_dvsn = "00" if price > 0 else "01"
         _label = f"{name}({symbol})" if name else symbol
+        order_excd = _to_order_excd(excd)   # NAS → NASD 등 변환
 
         body = {
             "CANO": self._cano,
             "ACNT_PRDT_CD": self._acnt_prdt_cd,
-            "OVRS_EXCG_CD": excd,
+            "OVRS_EXCG_CD": order_excd,
             "PDNO": symbol,
             "ORD_QTY": str(quantity),
             "OVRS_ORD_UNPR": f"{price:.2f}" if price > 0 else "0",
@@ -355,7 +383,7 @@ class KISOverseasBroker:
         data = resp.json()
         if data.get("rt_cd") != "0":
             raise RuntimeError(data.get("msg1", str(data)))
-        logger.info(f"[Night] BUY: {_label} {quantity}shares @ ${price:.2f}")
+        logger.info(f"[Night] BUY: {_label} {quantity}shares @ ${price:.2f} excd={order_excd}")
         return OverseasOrderResult(
             order_id=data["output"]["ODNO"],
             symbol=symbol, excd=excd,
@@ -375,11 +403,12 @@ class KISOverseasBroker:
         tr_id = _SELL_TR[self._mode]
         ord_dvsn = "00" if price > 0 else "01"
         _label = f"{name}({symbol})" if name else symbol
+        order_excd = _to_order_excd(excd)   # NAS → NASD 등 변환
 
         body = {
             "CANO": self._cano,
             "ACNT_PRDT_CD": self._acnt_prdt_cd,
-            "OVRS_EXCG_CD": excd,
+            "OVRS_EXCG_CD": order_excd,
             "PDNO": symbol,
             "ORD_QTY": str(quantity),
             "OVRS_ORD_UNPR": f"{price:.2f}" if price > 0 else "0",
@@ -398,7 +427,7 @@ class KISOverseasBroker:
         data = resp.json()
         if data.get("rt_cd") != "0":
             raise RuntimeError(data.get("msg1", str(data)))
-        logger.info(f"[Night] SELL: {_label} {quantity}shares @ ${price:.2f}")
+        logger.info(f"[Night] SELL: {_label} {quantity}shares @ ${price:.2f} excd={order_excd}")
         return OverseasOrderResult(
             order_id=data["output"]["ODNO"],
             symbol=symbol, excd=excd,
@@ -460,7 +489,7 @@ class KISOverseasBroker:
         body = {
             "CANO": self._cano,
             "ACNT_PRDT_CD": self._acnt_prdt_cd,
-            "OVRS_EXCG_CD": excd,
+            "OVRS_EXCG_CD": _to_order_excd(excd),
             "PDNO": symbol,
             "ORGN_ODNO": order_id,
             "RVSE_CNCL_DVSN_CD": "02",  # 02=취소
