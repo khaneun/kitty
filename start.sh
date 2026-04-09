@@ -47,6 +47,10 @@ mkdir -p /home/ec2-user/kitty/token_usage
 mkdir -p /home/ec2-user/kitty/commands
 mkdir -p /home/ec2-user/kitty/reports
 
+# Docker build context가 feedback 파일을 읽을 수 있도록 권한 보정
+sudo chmod -R 644 /home/ec2-user/kitty/feedback/*.json 2>/dev/null || true
+sudo chmod -R 644 /home/ec2-user/kitty/night-feedback/*.json 2>/dev/null || true
+
 docker run -d \
   --name kitty-trader \
   --restart unless-stopped \
