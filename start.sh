@@ -78,6 +78,10 @@ mkdir -p /home/ec2-user/kitty/reports
 _TG_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 _TG_CHAT=$(grep '^TELEGRAM_CHAT_ID=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 _MON_PW=$(grep '^MONITOR_PASSWORD=' /home/ec2-user/kitty/.env | cut -d= -f2-)
+_OPENAI_KEY=$(grep '^OPENAI_API_KEY=' /home/ec2-user/kitty/.env | cut -d= -f2-)
+_ANTHROPIC_KEY=$(grep '^ANTHROPIC_API_KEY=' /home/ec2-user/kitty/.env | cut -d= -f2-)
+_AI_PROVIDER=$(grep '^AI_PROVIDER=' /home/ec2-user/kitty/.env | cut -d= -f2-)
+_AI_MODEL=$(grep '^AI_MODEL=' /home/ec2-user/kitty/.env | cut -d= -f2-)
 
 echo "[4.6/5] kitty-night-trader 빌드 및 실행 중..."
 docker stop kitty-night-trader 2>/dev/null || true
@@ -139,18 +143,22 @@ docker run -d \
   --restart unless-stopped \
   --log-opt max-size=5m --log-opt max-file=3 \
   -v /home/ec2-user/kitty/logs:/logs:ro \
-  -v /home/ec2-user/kitty/feedback:/feedback:ro \
+  -v /home/ec2-user/kitty/feedback:/feedback \
   -v /home/ec2-user/kitty/token_usage:/token_usage:ro \
   -v /home/ec2-user/kitty/commands:/commands \
   -v /home/ec2-user/kitty/monitor-data:/data \
   -v /home/ec2-user/kitty/night-logs:/night-logs:ro \
-  -v /home/ec2-user/kitty/night-feedback:/night-feedback:ro \
+  -v /home/ec2-user/kitty/night-feedback:/night-feedback \
   -v /home/ec2-user/kitty/night-token_usage:/night-token_usage:ro \
   -v /home/ec2-user/kitty/reports:/reports:ro \
   -v /home/ec2-user/kitty/night-reports:/night-reports:ro \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \
   -e MONITOR_PASSWORD="$_MON_PW" \
+  -e OPENAI_API_KEY="$_OPENAI_KEY" \
+  -e ANTHROPIC_API_KEY="$_ANTHROPIC_KEY" \
+  -e AI_PROVIDER="${_AI_PROVIDER:-openai}" \
+  -e AI_MODEL="${_AI_MODEL:-gpt-4o}" \
   -p 8080:8080 \
   kitty-monitor
 

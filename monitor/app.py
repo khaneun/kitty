@@ -59,6 +59,12 @@ NIGHT_AGENT_CONTEXT      = NIGHT_LOG_DIR / "night_agent_context.json"
 NIGHT_AGENTS = ["NightSectorAnalyst", "NightStockPicker", "NightStockEvaluator",
                 "NightAssetManager", "NightBuyExecutor", "NightSellExecutor"]
 
+# ── 성향관리자 AI ─────────────────────────────────────────────────────────────
+ADV_AI_PROVIDER = os.getenv("AI_PROVIDER", "openai")
+ADV_AI_MODEL    = os.getenv("AI_MODEL", "gpt-4o")
+ADV_OPENAI_KEY  = os.getenv("OPENAI_API_KEY", "")
+ADV_ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
 # ── 로고 이미지 (base64 임베드) ──────────────────────────────────────────────
 import base64 as _b64
 _LOGO_URI = ""
@@ -830,6 +836,201 @@ def api_agent_prompts(req: Request):
     _auth(req)
     return _AGENT_PROMPTS
 
+
+# ── 성향관리자: 피드백 조회 / 추가 / AI 채팅 ─────────────────────────────────
+
+def _load_feedback_entries(agent: str) -> list:
+    fb_dir = NIGHT_FEEDBACK_DIR if agent.startswith("Night") else FEEDBACK_DIR
+    safe = agent.replace("/", "_").replace(" ", "_")
+    path = fb_dir / f"{safe}.json"
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _write_feedback_entries(agent: str, entries: list) -> None:
+    import tempfile
+    fb_dir = NIGHT_FEEDBACK_DIR if agent.startswith("Night") else FEEDBACK_DIR
+    safe = agent.replace("/", "_").replace(" ", "_")
+    path = fb_dir / f"{safe}.json"
+    fd = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".tmp", dir=path.parent, delete=False, encoding="utf-8"
+    )
+    fd.write(json.dumps(entries, ensure_ascii=False, indent=2))
+    fd.flush()
+    fd.close()
+    Path(fd.name).replace(path)
+
+
+def _advisor_context() -> str:
+    """성향관리자 AI에 주입할 컨텍스트 문자열 생성"""
+    lines = ["[에이전트 최근 성과 피드백]"]
+    for agent in AGENTS + NIGHT_AGENTS:
+        entries = _load_feedback_entries(agent)
+        if not entries:
+            continue
+        recent = entries[-7:]
+        scores = " → ".join(str(e.get("score", "?")) for e in recent)
+        last_imp = next((e.get("improvement", "") for e in reversed(recent) if e.get("improvement")), "")
+        lines.append(f"■ {agent}: 점수 추이 [{scores}]")
+        if last_imp:
+            lines.append(f"  최근 개선 과제: {last_imp}")
+    # 최근 리포트 summary
+    for rdir in [REPORTS_DIR, NIGHT_REPORTS_DIR]:
+        if not rdir.exists():
+            continue
+        reports = sorted(rdir.glob("*.json"), reverse=True)[:1]
+        for rp in reports:
+            try:
+                data = json.loads(rp.read_text(encoding="utf-8"))
+                total = data.get("summary", {})
+                date = data.get("date", "")
+                buys = total.get("total_buy_orders", 0)
+                sells = total.get("total_sell_orders", 0)
+                sentiments = total.get("market_sentiments", [])
+                lines.append(f"\n[최근 리포트 {date}] 매수:{buys} 매도:{sells} 시장:{', '.join(sentiments[-3:])}")
+            except Exception:
+                pass
+    return "\n".join(lines)
+
+
+_ADV_SYSTEM = """당신은 AI 투자 에이전트 시스템의 성향 관리자입니다.
+에이전트들의 성과를 분석하고 각 에이전트의 투자 판단 방식을 개선하는 역할입니다.
+
+운영 중인 에이전트:
+[KR 주식] 섹터분석가(섹터 전망) · 종목발굴가(매수후보) · 종목평가가(보유종목평가) · 자산운용가(최종주문결정) · 매수실행가 · 매도실행가
+[Night/US] NightSectorAnalyst · NightStockPicker · NightStockEvaluator · NightAssetManager · NightBuyExecutor · NightSellExecutor
+
+각 에이전트의 system_prompt에는 저장된 피드백이 자동 주입되어 다음 사이클부터 반영됩니다.
+개선 사항은 구체적이고 실행 가능하게 작성하세요. 판단 기준, 수치, 조건을 명확히 포함해야 합니다.
+
+개선 사항을 제안할 때는 반드시 응답 마지막에 아래 블록을 포함하세요:
+[SUGGESTIONS]
+{"items":[{"agent":"에이전트명","improvement":"개선 내용 (구체적으로)"}]}
+[/SUGGESTIONS]
+
+사용자가 저장 요청을 하지 않은 경우 이 블록을 생략하세요."""
+
+
+@app.get("/api/agent-feedback")
+def api_agent_feedback(req: Request):
+    """에이전트별 개선 피드백 항목 반환"""
+    _auth(req)
+    result: dict[str, list] = {}
+    for agent in AGENTS + NIGHT_AGENTS:
+        entries = _load_feedback_entries(agent)
+        result[agent] = [
+            {
+                "date":        e.get("date", ""),
+                "score":       e.get("score"),
+                "improvement": e.get("improvement", ""),
+                "summary":     e.get("summary", ""),
+            }
+            for e in entries
+            if e.get("improvement")
+        ]
+    return result
+
+
+@app.post("/api/agent-feedback/add")
+async def api_agent_feedback_add(req: Request):
+    """에이전트 피드백 추가 (날짜 같으면 덮어씀)"""
+    from fastapi import HTTPException
+    _auth(req)
+    body = await req.json()
+    agent = body.get("agent", "")
+    improvement = body.get("improvement", "").strip()
+    date = body.get("date", _now().strftime("%Y-%m-%d"))
+    if not agent or not improvement:
+        raise HTTPException(400, "agent and improvement required")
+    all_agents = AGENTS + NIGHT_AGENTS
+    if agent not in all_agents:
+        raise HTTPException(400, f"unknown agent: {agent}")
+    entries = _load_feedback_entries(agent)
+    existing = next((e for e in entries if e.get("date") == date), None)
+    if existing:
+        existing["improvement"] = improvement
+        if body.get("summary"):
+            existing["summary"] = body.get("summary")
+    else:
+        entries.append({
+            "date":        date,
+            "score":       body.get("score", 50),
+            "summary":     body.get("summary", "수동 입력"),
+            "improvement": improvement,
+        })
+    entries = entries[-14:]
+    _write_feedback_entries(agent, entries)
+    return {"ok": True, "agent": agent, "date": date}
+
+
+@app.post("/api/tendency-advisor")
+async def api_tendency_advisor(req: Request):
+    """성향관리자 AI 채팅"""
+    _auth(req)
+    body = await req.json()
+    message = body.get("message", "").strip()
+    history = body.get("history", [])
+    if not message:
+        return {"reply": "", "suggestions": []}
+
+    # 첫 메시지에 컨텍스트 주입
+    messages = list(history)
+    user_content = message
+    if not history:
+        ctx = _advisor_context()
+        user_content = f"[현재 에이전트 성과 컨텍스트]\n{ctx}\n\n[사용자 질문]\n{message}"
+    messages.append({"role": "user", "content": user_content})
+
+    reply = ""
+    try:
+        if ADV_AI_PROVIDER == "anthropic" and ADV_ANTHROPIC_KEY:
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                r = await c.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": ADV_ANTHROPIC_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={"model": ADV_AI_MODEL, "max_tokens": 1024,
+                          "system": _ADV_SYSTEM, "messages": messages},
+                )
+                data = r.json()
+                reply = (data.get("content") or [{}])[0].get("text", "")
+        elif ADV_OPENAI_KEY:
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                r = await c.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {ADV_OPENAI_KEY}",
+                             "content-type": "application/json"},
+                    json={"model": ADV_AI_MODEL, "max_tokens": 1024,
+                          "messages": [{"role": "system", "content": _ADV_SYSTEM}] + messages},
+                )
+                data = r.json()
+                reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        else:
+            reply = "AI API 키가 설정되지 않았습니다. start.sh에서 OPENAI_API_KEY 또는 ANTHROPIC_API_KEY를 모니터 컨테이너에 전달하세요."
+    except Exception as e:
+        reply = f"AI 호출 실패: {str(e)[:300]}"
+
+    # 제안 블록 파싱
+    suggestions: list = []
+    m = re.search(r'\[SUGGESTIONS\](.*?)\[/SUGGESTIONS\]', reply, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1).strip())
+            suggestions = data.get("items", [])
+            reply = reply[:reply.index("[SUGGESTIONS]")].strip()
+        except Exception:
+            pass
+
+    return {"reply": reply, "suggestions": suggestions}
+
+
 _HTML = r"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -1015,6 +1216,22 @@ body{padding-bottom:80px}
 .chat-input-row{display:flex;gap:8px;align-items:flex-end;padding:10px 14px 18px;border-top:1px solid #21262d;flex-shrink:0}
 .chat-input{flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:8px;padding:8px 10px;font-size:13px;resize:none;min-height:40px;max-height:100px;outline:none;font-family:inherit;line-height:1.5}
 .chat-input:focus{border-color:#58a6ff}
+/* 성향관리 탭 */
+.adv-agent-block{margin-bottom:10px;background:#161b22;border-radius:8px;padding:10px 12px}
+.adv-agent-name{font-size:11px;font-weight:700;color:#58a6ff;margin-bottom:6px;letter-spacing:.3px}
+.adv-item{padding:5px 0;border-top:1px solid #21262d;margin-top:4px;display:flex;gap:8px;align-items:flex-start}
+.adv-item-date{font-size:10px;color:#484f58;flex-shrink:0;padding-top:1px}
+.adv-item-text{font-size:12px;color:#c9d1d9;flex:1;line-height:1.5}
+.adv-sugg-item{background:#1a1200;border:1px solid #d29922;border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.adv-sugg-agent{font-size:10px;color:#d29922;font-weight:700;margin-bottom:4px;letter-spacing:.3px}
+.adv-sugg-text{font-size:12px;color:#c9d1d9;line-height:1.5}
+#adv-chat-box{height:220px;overflow-y:auto;background:#0d1117;border-radius:8px;padding:10px;border:1px solid #21262d;margin-bottom:8px;display:flex;flex-direction:column;gap:8px}
+.adv-msg-user{align-self:flex-end;background:#1c4a7a;color:#cae0f9;padding:7px 11px;border-radius:10px 10px 3px 10px;font-size:12px;max-width:88%;word-break:break-word;white-space:pre-wrap;line-height:1.5}
+.adv-msg-ai{align-self:flex-start;background:#21262d;color:#c9d1d9;padding:7px 11px;border-radius:10px 10px 10px 3px;font-size:12px;max-width:92%;word-break:break-word;white-space:pre-wrap;line-height:1.5}
+.adv-thinking{color:#484f58;font-size:11px;font-style:italic;animation:blink 1.4s infinite;padding:4px 2px;align-self:flex-start}
+#adv-prompt-box{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:10px;margin-top:8px;max-height:280px;overflow-y:auto}
+#adv-prompt-text{font-size:10px;color:#8b949e;white-space:pre-wrap;word-break:break-word;line-height:1.5}
+#adv-prompt-feedback{font-size:10px;color:#3fb950;white-space:pre-wrap;word-break:break-word;line-height:1.5;border-top:1px solid #21262d;margin-top:8px;padding-top:8px}
 /* 페이지네이션 */
 .pg-btn{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;min-width:32px}
 .pg-btn:hover:not(:disabled){background:#30363d}.pg-btn:disabled{opacity:.35;cursor:default}
@@ -1056,6 +1273,7 @@ body{padding-bottom:80px}
 <div class="subtabs" id="subtabs" style="display:none">
   <div class="subtab active" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
   <div class="subtab" id="sub-tab-tokens" onclick="switchAdmin('tokens')">🔢 토큰</div>
+  <div class="subtab" id="sub-tab-advisor" onclick="switchAdmin('advisor')">🧠 성향관리</div>
 </div>
 
 
@@ -1211,6 +1429,77 @@ body{padding-bottom:80px}
 </div>
 </div>
 
+<!-- ══ 성향관리 탭 ══ -->
+<div id="tab-advisor" class="tab-content">
+<div class="wrap">
+
+  <!-- 에이전트 프롬프트 확인 -->
+  <div class="section">
+    <div class="sec-title">에이전트 프롬프트</div>
+    <select id="adv-prompt-sel" class="gnb-select" style="width:100%;margin-bottom:4px" onchange="showAdvPrompt()">
+      <option value="">에이전트 선택...</option>
+      <optgroup label="KR 주식">
+        <option>섹터분석가</option><option>종목발굴가</option><option>종목평가가</option>
+        <option>자산운용가</option><option>매수실행가</option><option>매도실행가</option>
+      </optgroup>
+      <optgroup label="Night (US)">
+        <option>NightSectorAnalyst</option><option>NightStockPicker</option>
+        <option>NightStockEvaluator</option><option>NightAssetManager</option>
+        <option>NightBuyExecutor</option><option>NightSellExecutor</option>
+      </optgroup>
+    </select>
+    <div id="adv-prompt-box" style="display:none">
+      <pre id="adv-prompt-text"></pre>
+      <pre id="adv-prompt-feedback" style="display:none"></pre>
+    </div>
+  </div>
+
+  <!-- 개선 피드백 리스트 -->
+  <div class="section">
+    <div class="sec-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>개선 피드백 리스트</span>
+      <select id="adv-agent-filter" class="gnb-select" style="font-size:10px" onchange="renderAdvImprovements()">
+        <option value="">전체</option>
+        <optgroup label="KR">
+          <option>섹터분석가</option><option>종목발굴가</option><option>종목평가가</option>
+          <option>자산운용가</option><option>매수실행가</option><option>매도실행가</option>
+        </optgroup>
+        <optgroup label="Night">
+          <option>NightSectorAnalyst</option><option>NightStockPicker</option>
+          <option>NightStockEvaluator</option><option>NightAssetManager</option>
+          <option>NightBuyExecutor</option><option>NightSellExecutor</option>
+        </optgroup>
+      </select>
+    </div>
+    <div id="adv-improvements" style="margin-top:8px"><div class="empty">로딩 중...</div></div>
+  </div>
+
+  <!-- AI 성향관리자 대화 -->
+  <div class="section">
+    <div class="sec-title">성향관리자 AI 대화</div>
+    <div id="adv-chat-box">
+      <div id="adv-chat-placeholder" class="adv-thinking" style="animation:none;color:#484f58;font-style:normal;font-size:12px;padding:8px">
+        에이전트 성과와 개선 방향에 대해 대화하세요.<br>
+        <span style="font-size:11px;color:#30363d">예: "어떤 에이전트 개선이 시급한가요?" · "종목평가가 판단 기준을 어떻게 강화할까요?"</span>
+      </div>
+    </div>
+    <!-- 제안된 개선사항 -->
+    <div id="adv-sugg-section" style="display:none;margin-bottom:8px">
+      <div class="sec-title" style="color:#d29922;font-size:11px;margin-bottom:6px">💡 제안된 개선사항 (저장하면 다음 사이클부터 반영)</div>
+      <div id="adv-sugg-list"></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end">
+      <textarea id="adv-chat-input" class="chat-input" rows="2"
+        placeholder="개선 방향 질문 (Enter: 전송 / Shift+Enter: 줄바꿈)"
+        onkeydown="onAdvKey(event)" oninput="autoResize(this)"></textarea>
+      <button class="btn btn-pri" id="adv-send-btn" onclick="sendAdvChat()" style="flex-shrink:0">전송</button>
+    </div>
+    <button class="btn" onclick="clearAdvChat()" style="margin-top:6px;font-size:11px;width:100%">대화 초기화</button>
+  </div>
+
+</div>
+</div>
+
 <!-- ══ 매매일지 탭 ══ -->
 <div id="tab-trades" class="tab-content">
 <div class="wrap">
@@ -1318,6 +1607,10 @@ function switchView(view) {
 
 // ── 탭 전환 ─────────────────────────────────────────────
 let _adminTab = 'errors';
+let _advFeedback = {};
+let _advPrompts = {};
+let _advHistory = [];
+let _advSuggestions = [];
 
 function switchMain(name) {
   ['agents','trades','admin'].forEach(t => {
@@ -1325,7 +1618,7 @@ function switchMain(name) {
     if(el) el.classList.toggle('active', t===name);
   });
   document.getElementById('subtabs').style.display = name==='admin' ? 'flex' : 'none';
-  ['errors','tokens','agents','trades'].forEach(n => {
+  ['errors','tokens','advisor','agents','trades'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
   if(name === 'agents') {
@@ -1351,7 +1644,7 @@ function switchMain(name) {
 
 function switchAdmin(name) {
   _adminTab = name;
-  ['errors','tokens'].forEach(n => {
+  ['errors','tokens','advisor'].forEach(n => {
     document.getElementById('sub-tab-'+n).classList.toggle('active', n===name);
     document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
@@ -1361,6 +1654,7 @@ function switchAdmin(name) {
     if(_currentView === 'night') loadNightTokens();
     else loadTokens();
   }
+  if(name==='advisor'){ loadAdvisor(); }
 }
 
 // ── 채팅 팝업 ────────────────────────────────────────────
@@ -2086,6 +2380,153 @@ async function loadNightAgentScores() {
     }).join('')}</tbody>`;
     document.getElementById('nt-heatmap').innerHTML = thead + tbody;
   } catch(e){ console.error('night-agent-scores',e); }
+}
+
+// ── 성향관리 탭 ─────────────────────────────────────
+async function loadAdvisor() {
+  try {
+    const [fbRes, prRes] = await Promise.all([
+      fetch('/api/agent-feedback').then(r=>r.json()),
+      fetch('/api/agent-prompts').then(r=>r.json()),
+    ]);
+    _advFeedback = fbRes;
+    _advPrompts = prRes;
+    renderAdvImprovements();
+    showAdvPrompt();
+  } catch(e){ console.error('loadAdvisor', e); }
+}
+
+function renderAdvImprovements() {
+  const filter = document.getElementById('adv-agent-filter').value;
+  const container = document.getElementById('adv-improvements');
+  const agents = Object.keys(_advFeedback).filter(a => !filter || a===filter);
+  const hasAny = agents.some(a => _advFeedback[a]?.length > 0);
+  if (!hasAny) {
+    container.innerHTML = '<div class="empty">개선 피드백 없음</div>';
+    return;
+  }
+  container.innerHTML = agents.filter(a => _advFeedback[a]?.length > 0).map(agent => {
+    const items = [..._advFeedback[agent]].reverse();
+    return `<div class="adv-agent-block">
+      <div class="adv-agent-name">${esc(agent)}</div>
+      ${items.map(it=>`<div class="adv-item">
+        <span class="adv-item-date">${esc(it.date)}</span>
+        <span class="adv-item-text">${esc(it.improvement)}</span>
+      </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+function showAdvPrompt() {
+  const sel = document.getElementById('adv-prompt-sel').value;
+  const box = document.getElementById('adv-prompt-box');
+  if (!sel) { box.style.display='none'; return; }
+  const prompt = _advPrompts[sel] || '(프롬프트 없음)';
+  document.getElementById('adv-prompt-text').textContent = prompt;
+  const feedbacks = (_advFeedback[sel]||[]).slice(-5);
+  const fbEl = document.getElementById('adv-prompt-feedback');
+  if (feedbacks.length) {
+    const txt = '[📊 현재 주입 중인 피드백]\n' + feedbacks.map(f=>`• ${f.date}: ${f.improvement}`).join('\n');
+    fbEl.textContent = txt;
+    fbEl.style.display = 'block';
+  } else {
+    fbEl.style.display = 'none';
+  }
+  box.style.display = 'block';
+}
+
+async function sendAdvChat() {
+  const input = document.getElementById('adv-chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  autoResize(input);
+  appendAdvMsg('user', msg);
+  const btn = document.getElementById('adv-send-btn');
+  btn.disabled = true; btn.textContent = '...';
+  const box = document.getElementById('adv-chat-box');
+  const thinking = document.createElement('div');
+  thinking.className = 'adv-thinking';
+  thinking.textContent = '분석 중...';
+  box.appendChild(thinking);
+  box.scrollTop = box.scrollHeight;
+  try {
+    const res = await fetch('/api/tendency-advisor', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({message: msg, history: _advHistory}),
+    });
+    const data = await res.json();
+    thinking.remove();
+    _advHistory.push({role:'user', content: msg});
+    _advHistory.push({role:'assistant', content: data.reply});
+    appendAdvMsg('ai', data.reply);
+    if (data.suggestions?.length) {
+      _advSuggestions = data.suggestions;
+      renderAdvSuggestions();
+    }
+  } catch(e) {
+    thinking.remove();
+    appendAdvMsg('ai', '오류가 발생했습니다: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '전송';
+  }
+}
+
+function appendAdvMsg(role, text) {
+  const box = document.getElementById('adv-chat-box');
+  const ph = document.getElementById('adv-chat-placeholder');
+  if (ph) ph.remove();
+  const div = document.createElement('div');
+  div.className = role==='user' ? 'adv-msg-user' : 'adv-msg-ai';
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderAdvSuggestions() {
+  const section = document.getElementById('adv-sugg-section');
+  const list = document.getElementById('adv-sugg-list');
+  list.innerHTML = _advSuggestions.map((s,i)=>`
+    <div class="adv-sugg-item">
+      <div class="adv-sugg-agent">${esc(s.agent)}</div>
+      <div class="adv-sugg-text">${esc(s.improvement)}</div>
+      <button class="btn btn-pri" style="font-size:11px;padding:4px 10px;margin-top:6px"
+        onclick="saveAdvImprovement(${i},this)">저장</button>
+    </div>`).join('');
+  section.style.display = 'block';
+}
+
+async function saveAdvImprovement(idx, btn) {
+  const s = _advSuggestions[idx];
+  if (!s) return;
+  btn.disabled = true; btn.textContent = '저장 중...';
+  try {
+    const res = await fetch('/api/agent-feedback/add', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({agent: s.agent, improvement: s.improvement, summary: 'AI 제안'}),
+    });
+    if (res.ok) {
+      btn.textContent = '✓ 저장됨';
+      await loadAdvisor();
+    } else {
+      btn.disabled = false; btn.textContent = '저장';
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = '저장';
+  }
+}
+
+function clearAdvChat() {
+  _advHistory = []; _advSuggestions = [];
+  document.getElementById('adv-chat-box').innerHTML =
+    '<div id="adv-chat-placeholder" class="adv-thinking" style="animation:none;color:#484f58;font-style:normal;font-size:12px;padding:8px">에이전트 성과와 개선 방향에 대해 대화하세요.</div>';
+  document.getElementById('adv-sugg-section').style.display = 'none';
+}
+
+function onAdvKey(e) {
+  if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendAdvChat(); }
 }
 
 // ── 초기화 & 자동 갱신 ──────────────────────────────────
