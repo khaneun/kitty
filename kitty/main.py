@@ -36,6 +36,7 @@ from kitty.agents import (
     SellExecutorAgent,
     StockEvaluatorAgent,
     StockPickerAgent,
+    StockScreenerAgent,
     TendencyAgent,
 )
 from kitty.broker import KISBroker
@@ -47,7 +48,7 @@ from kitty.utils import logger, print_portfolio_and_balance, setup_logger
 
 
 async def _collect_market_data(broker: KISBroker) -> dict:
-    """실시간 시장 지표 + 거래량 상위 종목 수집"""
+    """실시간 시장 지표 + 거래량/등락률 상위 종목 수집 (KOSPI + KOSDAQ 전체)"""
     # 시장 지표 (ETF + 대형주)
     barometers: list[dict] = []
     for sym in _BAROMETER_SYMBOLS:
@@ -56,16 +57,42 @@ async def _collect_market_data(broker: KISBroker) -> dict:
             barometers.append(q.model_dump())
         except Exception as e:
             logger.debug(f"시장지표 {sym} 조회 실패: {e}")
-        # _throttle_quote()가 broker 내부에서 간격 보장 — 추가 sleep 불필요
 
-    # 거래량 상위 종목
-    volume_leaders: list[dict] = []
+    # KOSPI 거래량 순위
+    kospi_vol: list[dict] = []
     try:
-        volume_leaders = await broker.get_volume_rank(50)
+        kospi_vol = await broker.get_volume_rank(market="J", count=50)
     except Exception as e:
-        logger.warning(f"거래량순위 조회 실패 (무시): {e}")
+        logger.warning(f"KOSPI 거래량순위 조회 실패 (무시): {e}")
 
-    return {"barometers": barometers, "volume_leaders": volume_leaders}
+    # KOSDAQ 거래량 순위
+    kosdaq_vol: list[dict] = []
+    try:
+        kosdaq_vol = await broker.get_volume_rank(market="Q", count=50)
+    except Exception as e:
+        logger.warning(f"KOSDAQ 거래량순위 조회 실패 (무시): {e}")
+
+    # KOSPI 등락률 순위
+    kospi_chg: list[dict] = []
+    try:
+        kospi_chg = await broker.get_change_rate_rank(market="J", count=50)
+    except Exception as e:
+        logger.warning(f"KOSPI 등락률순위 조회 실패 (무시): {e}")
+
+    # KOSDAQ 등락률 순위
+    kosdaq_chg: list[dict] = []
+    try:
+        kosdaq_chg = await broker.get_change_rate_rank(market="Q", count=50)
+    except Exception as e:
+        logger.warning(f"KOSDAQ 등락률순위 조회 실패 (무시): {e}")
+
+    market_pool = kospi_vol + kosdaq_vol + kospi_chg + kosdaq_chg
+
+    return {
+        "barometers": barometers,
+        "volume_leaders": kospi_vol,  # 기존 호환성 유지 (섹터분석가 입력)
+        "market_pool": market_pool,
+    }
 
 
 def _save_agent_context(agent_name: str, output: dict) -> None:
@@ -161,6 +188,7 @@ def _is_market_hours() -> bool:
 async def run_trading_cycle(
     broker: KISBroker,
     sector_analyst: SectorAnalystAgent,
+    stock_screener: StockScreenerAgent,
     stock_evaluator: StockEvaluatorAgent,
     stock_picker: StockPickerAgent,
     asset_manager: AssetManagerAgent,
@@ -187,11 +215,11 @@ async def run_trading_cycle(
     total_asset_value = int(balance_summary.get("tot_evlu_amt", 0))
     logger.info(f"보유종목: {len(portfolio)}개 | 가용현금: {available_cash:,}원 | 총자산: {total_asset_value:,}원")
 
-    # 1.5. 실시간 시장 데이터 수집 (지표 + 거래량 순위)
+    # 1.5. 실시간 시장 데이터 수집 (지표 + KOSPI/KOSDAQ 거래량·등락률 순위)
     market_data = await _collect_market_data(broker)
     logger.info(
         f"시장데이터: 지표 {len(market_data['barometers'])}개 | "
-        f"거래량순위 {len(market_data['volume_leaders'])}개"
+        f"시장풀 {len(market_data['market_pool'])}개 (중복 포함)"
     )
 
     # 2. 섹터분석 (SectorAnalystAgent) — 실시간 데이터 기반
@@ -211,22 +239,33 @@ async def run_trading_cycle(
         "target_min_holdings": 3,
     }
 
-    # 3. 후보 종목 + 보유 종목 + 거래량 상위 종목 시세 조회
+    # 2.5. 종목스크리닝 (StockScreenerAgent) — KOSPI+KOSDAQ 전종목 섹터 필터링
+    holdings_symbols = [h.get("pdno", "") for h in portfolio if h.get("pdno")]
+    screener_result = await stock_screener.run({
+        "sector_analysis": analysis,
+        "market_pool": market_data["market_pool"],
+        "holdings_symbols": holdings_symbols,
+    })
+    screened = screener_result.get("screened", [])
+    logger.info(f"[스크리너] {screener_result.get('summary', f'{len(screened)}개 선별')}")
+    _save_agent_context("종목스크리너", screener_result)
+
+    # 3. 스크리닝된 후보 + 보유 종목 시세 조회
     candidate_symbols: set[str] = set()
-    for sector in analysis.get("sectors", []):
-        for symbol in sector.get("candidate_symbols", []):
-            candidate_symbols.add(symbol)
+    for s in screened:
+        sym = s.get("symbol", "")
+        if sym:
+            candidate_symbols.add(sym)
     for holding in portfolio:
         pdno = holding.get("pdno", "")
         if pdno:
             candidate_symbols.add(pdno)
-    # 거래량 상위 종목도 후보에 추가 (유동성 있는 종목 보장)
-    for vl in market_data.get("volume_leaders", []):
-        sym = vl.get("symbol", "")
-        if sym:
-            candidate_symbols.add(sym)
+    # 섹터분석 candidate_symbols도 보조 추가 (스크리너 실패 시 폴백)
+    for sector in analysis.get("sectors", []):
+        for symbol in sector.get("candidate_symbols", []):
+            candidate_symbols.add(symbol)
 
-    logger.info(f"시세 조회 대상: {sorted(candidate_symbols)}")
+    logger.info(f"시세 조회 대상: {len(candidate_symbols)}개")
     quotes = []
     for symbol in sorted(candidate_symbols):
         try:
@@ -249,7 +288,7 @@ async def run_trading_cycle(
     reporter.update_evaluation(stock_evaluation)
     _save_agent_context("종목평가가", stock_evaluation)
 
-    # 5. 종목발굴 (StockPickerAgent) - 신규 후보 + 거래량 데이터
+    # 5. 종목발굴 (StockPickerAgent) - 스크리닝된 후보 + 시세 기반 최종 선정
     new_candidates = await stock_picker.run({
         "analysis": analysis,
         "quotes": quotes,
@@ -259,6 +298,7 @@ async def run_trading_cycle(
         "tendency_directive": tendency_directive,
         "volume_leaders": market_data.get("volume_leaders", []),
         "portfolio_meta": portfolio_meta,
+        "screened_candidates": screened,
     })
     daily_report.record_stock_picks(new_candidates)
     _save_agent_context("종목발굴가", new_candidates)
@@ -393,6 +433,7 @@ async def main() -> None:
 
     broker = KISBroker()
     sector_analyst = SectorAnalystAgent()
+    stock_screener = StockScreenerAgent()
     stock_evaluator = StockEvaluatorAgent()
     stock_picker = StockPickerAgent()
     asset_manager = AssetManagerAgent()
@@ -413,6 +454,7 @@ async def main() -> None:
         await run_trading_cycle(
             broker,
             sector_analyst,
+            stock_screener,
             stock_evaluator,
             stock_picker,
             asset_manager,
@@ -429,6 +471,7 @@ async def main() -> None:
     # 채팅 핸들러 백그라운드 태스크
     _agents_map = {
         "섹터분석가": sector_analyst,
+        "종목스크리너": stock_screener,
         "종목평가가": stock_evaluator,
         "종목발굴가": stock_picker,
         "자산운용가": asset_manager,

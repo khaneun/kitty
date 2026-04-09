@@ -404,11 +404,13 @@ class KISBroker:
             logger.warning(f"주문 취소 실패: {data.get('msg1')}")
         return success
 
-    async def get_volume_rank(self, count: int = 50) -> list[dict[str, Any]]:
+    async def get_volume_rank(self, market: str = "J", count: int = 50) -> list[dict[str, Any]]:
         """거래량 상위 종목 조회 (TR: FHPST01710000)
 
+        Args:
+            market: "J" = KOSPI, "Q" = KOSDAQ
         Returns:
-            [{"symbol", "name", "current_price", "change_rate", "volume", "turnover"}, ...]
+            [{"symbol", "name", "industry", "market", "current_price", "change_rate", "volume", "turnover"}, ...]
         """
         await self._throttle_quote()
 
@@ -418,8 +420,8 @@ class KISBroker:
                 f"{self._base_url}/uapi/domestic-stock/v1/quotations/volume-rank",
                 headers=headers,
                 params={
-                    "FID_COND_MRKT_DIV_CODE": "J",
-                    "FID_COND_SCR_DIV_CODE": "20101",
+                    "FID_COND_MRKT_DIV_CODE": market,
+                    "FID_COND_SCR_DIV_CODE": "20171" if market == "Q" else "20101",
                     "FID_INPUT_ISCD": "0000",
                     "FID_DIV_CLS_CODE": "0",
                     "FID_BLNG_CLS_CODE": "0",
@@ -432,7 +434,8 @@ class KISBroker:
                 },
             )
 
-        resp = await self._call_with_retry(_req, "거래량순위조회")
+        label = "KOSDAQ거래량순위" if market == "Q" else "KOSPI거래량순위"
+        resp = await self._call_with_retry(_req, label)
         data = resp.json()
         result: list[dict[str, Any]] = []
         for item in data.get("output", [])[:count]:
@@ -440,12 +443,65 @@ class KISBroker:
             if not sym:
                 continue
             result.append({
-                "symbol": sym,
-                "name": item.get("hts_kor_isnm", ""),
+                "symbol":        sym,
+                "name":          item.get("hts_kor_isnm", ""),
+                "industry":      item.get("bstp_kor_isnm", ""),   # 업종명 (섹터 매칭용)
+                "market":        "KOSDAQ" if market == "Q" else "KOSPI",
                 "current_price": int(item.get("stck_prpr", 0)),
-                "change_rate": float(item.get("prdy_ctrt", 0.0)),
-                "volume": int(item.get("acml_vol", 0)),
-                "turnover": int(item.get("acml_tr_pbmn", 0)),
+                "change_rate":   float(item.get("prdy_ctrt", 0.0)),
+                "volume":        int(item.get("acml_vol", 0)),
+                "turnover":      int(item.get("acml_tr_pbmn", 0)),
+            })
+        return result
+
+    async def get_change_rate_rank(self, market: str = "J", count: int = 50) -> list[dict[str, Any]]:
+        """등락률 상위 종목 조회 (TR: FHPST01720000)
+
+        Args:
+            market: "J" = KOSPI, "Q" = KOSDAQ
+        Returns:
+            [{"symbol", "name", "industry", "market", "current_price", "change_rate", "volume", "turnover"}, ...]
+        """
+        await self._throttle_quote()
+
+        async def _req():
+            headers = await self._headers("FHPST01720000")
+            return await self._client.get(
+                f"{self._base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+                headers=headers,
+                params={
+                    "FID_COND_MRKT_DIV_CODE": market,
+                    "FID_COND_SCR_DIV_CODE": "20172" if market == "Q" else "20170",
+                    "FID_INPUT_ISCD": "0000",
+                    "FID_RANK_SORT_CLS_CODE": "0",       # 0 = 상승률 순
+                    "FID_DIFF_CLS_CODE":       "2",       # 2 = 전일 대비
+                    "FID_TRGT_CLS_CODE":       "0",
+                    "FID_TRGT_EXLS_CLS_CODE":  "0000000000",
+                    "FID_INPUT_PRICE_1":        "",
+                    "FID_INPUT_PRICE_2":        "",
+                    "FID_RST_DVS_CODE":         "0",
+                    "FID_INPUT_ISCD2":          "",
+                    "FID_INPUT_DATE_1":         "",
+                },
+            )
+
+        label = "KOSDAQ등락률순위" if market == "Q" else "KOSPI등락률순위"
+        resp = await self._call_with_retry(_req, label)
+        data = resp.json()
+        result: list[dict[str, Any]] = []
+        for item in data.get("output", [])[:count]:
+            sym = item.get("mksc_shrn_iscd", "")
+            if not sym:
+                continue
+            result.append({
+                "symbol":        sym,
+                "name":          item.get("hts_kor_isnm", ""),
+                "industry":      item.get("bstp_kor_isnm", ""),
+                "market":        "KOSDAQ" if market == "Q" else "KOSPI",
+                "current_price": int(item.get("stck_prpr", 0)),
+                "change_rate":   float(item.get("prdy_ctrt", 0.0)),
+                "volume":        int(item.get("acml_vol", 0)),
+                "turnover":      int(item.get("acml_tr_pbmn", 0)),
             })
         return result
 

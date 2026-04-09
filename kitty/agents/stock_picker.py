@@ -92,6 +92,24 @@ class StockPickerAgent(BaseAgent):
             for q in quotes
         )
 
+        # 스크리닝된 후보 종목 (StockScreenerAgent 결과)
+        screened = context.get("screened_candidates", [])
+        screened_section = ""
+        if screened:
+            screened_lines = "\n".join(
+                f"  [{s.get('market','?')}] {s.get('symbol','')} {s.get('name','')} | "
+                f"섹터:{s.get('matched_sector','')}({s.get('sector_trend','')}) | "
+                f"등락:{s.get('change_rate',0):+.2f}% | "
+                f"거래대금:{s.get('turnover',0)//100_000_000:.0f}억 | "
+                f"{s.get('reason','')}"
+                for s in screened
+            )
+            screened_section = (
+                f"\n[스크리닝된 후보 종목 — {len(screened)}개 (KOSPI+KOSDAQ 전체 섹터 필터링 결과)]\n"
+                f"{screened_lines}\n"
+                f"위 후보 중 시세([후보 종목 현재가] 참조)와 R:R 기준을 충족하는 종목을 매수 추천하세요.\n"
+            )
+
         # 거래량 상위 종목 (유동성 참고용)
         volume_text = ""
         if volume_leaders:
@@ -115,7 +133,7 @@ class StockPickerAgent(BaseAgent):
             diversity_section = f"\n[포트폴리오 다양성]\n현재 보유 {holdings_count}개. 다양화 관점에서 추가 추천을 검토하세요.\n"
 
         prompt = f"""섹터 분석과 실시간 시세·거래량을 검토하여 신규 매수 종목을 선정해주세요.
-{tendency_section}{diversity_section}
+{tendency_section}{diversity_section}{screened_section}
 [섹터 분석]
 {json.dumps(analysis, ensure_ascii=False, indent=2)}
 
