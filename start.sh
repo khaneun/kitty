@@ -35,21 +35,20 @@ echo "[4/5] Docker 빌드 및 실행 중..."
 docker stop kitty-trader 2>/dev/null || true
 docker rm kitty-trader 2>/dev/null || true
 
-docker build -t kitty-trader .
-
-# 빌드 후 미사용 이미지 레이어 정리 (디스크 누적 방지)
-docker image prune -f
-
 mkdir -p /home/ec2-user/kitty/feedback
 mkdir -p /home/ec2-user/kitty/logs
-
 mkdir -p /home/ec2-user/kitty/token_usage
 mkdir -p /home/ec2-user/kitty/commands
 mkdir -p /home/ec2-user/kitty/reports
 
-# Docker build context가 feedback 파일을 읽을 수 있도록 권한 보정
+# Docker build context가 feedback 파일을 읽을 수 있도록 권한 보정 (빌드 전 적용)
 sudo chmod -R 644 /home/ec2-user/kitty/feedback/*.json 2>/dev/null || true
 sudo chmod -R 644 /home/ec2-user/kitty/night-feedback/*.json 2>/dev/null || true
+
+docker build -t kitty-trader .
+
+# 빌드 후 미사용 이미지 레이어 정리 (디스크 누적 방지)
+docker image prune -f
 
 docker run -d \
   --name kitty-trader \
