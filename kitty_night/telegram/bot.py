@@ -37,13 +37,14 @@ class NightTelegramReporter:
             logger.error(f"[Night:Telegram] Send failed: {e}")
 
     async def report_trade(
-        self, action: str, symbol: str, quantity: int, price: float, reason: str,
+        self, action: str, symbol: str, quantity: int, price: float, reason: str, name: str = "",
     ) -> None:
         emoji = "🟢" if action == "BUY" else "🔴"
         price_str = f"${price:,.2f}" if price > 0 else "market"
+        label = f"{name}({symbol})" if name else symbol
         msg = (
             f"{emoji} *Night {action}*\n"
-            f"`{symbol}` × {quantity} shares @ {price_str}\n"
+            f"`{label}` × {quantity} shares @ {price_str}\n"
             f"_{reason}_"
         )
         await self.send(msg)

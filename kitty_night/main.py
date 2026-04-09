@@ -268,12 +268,12 @@ async def run_trading_cycle(
     for r in sell_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
             price = r.get("price") or float(night_quote_map.get(r["symbol"], {}).get("current_price", 0))
-            await reporter.report_trade("SELL", r["symbol"], r["quantity"], price, "Night strategy")
+            await reporter.report_trade("SELL", r["symbol"], r["quantity"], price, "Night strategy", name=r.get("name", ""))
 
     for r in buy_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
             price = r.get("price") or float(night_quote_map.get(r["symbol"], {}).get("current_price", 0))
-            await reporter.report_trade("BUY", r["symbol"], r["quantity"], price, "Night strategy")
+            await reporter.report_trade("BUY", r["symbol"], r["quantity"], price, "Night strategy", name=r.get("name", ""))
 
     daily_report.end_cycle()
     logger.info("=== Night Trading Cycle Complete ===")

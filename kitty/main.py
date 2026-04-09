@@ -322,12 +322,12 @@ async def run_trading_cycle(
     for r in buy_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
             price = r.get("price") or int(quote_map.get(r["symbol"], {}).get("current_price", 0))
-            await reporter.report_trade("BUY", r["symbol"], r["quantity"], price, "전략 매수")
+            await reporter.report_trade("BUY", r["symbol"], r["quantity"], price, "전략 매수", name=r.get("name", ""))
 
     for r in sell_results:
         if r.get("status") not in ("SKIPPED", "FAILED"):
             price = r.get("price") or int(quote_map.get(r["symbol"], {}).get("current_price", 0))
-            await reporter.report_trade("SELL", r["symbol"], r["quantity"], price, "전략 매도")
+            await reporter.report_trade("SELL", r["symbol"], r["quantity"], price, "전략 매도", name=r.get("name", ""))
 
     daily_report.end_cycle()
     reporter.mark_cycle_done()

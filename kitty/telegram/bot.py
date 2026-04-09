@@ -78,12 +78,13 @@ class TelegramReporter:
         except Exception as e:
             logger.error(f"텔레그램 전송 실패: {e}")
 
-    async def report_trade(self, action: str, symbol: str, quantity: int, price: int, reason: str) -> None:
+    async def report_trade(self, action: str, symbol: str, quantity: int, price: int, reason: str, name: str = "") -> None:
         emoji = "🟢" if action == "BUY" else "🔴"
         price_str = f"{price:,}원" if price > 0 else "시장가"
+        label = f"{name}({symbol})" if name else symbol
         await self.send(
             f"{emoji} *{action}* 체결\n"
-            f"종목: `{symbol}`\n"
+            f"종목: `{label}`\n"
             f"수량: {quantity:,}주\n"
             f"가격: {price_str}\n"
             f"사유: {reason}"
