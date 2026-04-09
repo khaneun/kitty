@@ -6,6 +6,7 @@ https://apiportal.koreainvestment.com/apiservice/overseas-stock
 연속 주문 제한: 동일 종목 최소 1초 간격, 초당 최대 2건
 """
 import asyncio
+import random
 import time
 from datetime import datetime, timedelta
 from typing import Any
@@ -75,13 +76,13 @@ class KISOverseasBroker:
 
     # 연속 주문 제한: 1.2초 간격 (규정 1초 + 0.2초 여유)
     _ORDER_INTERVAL = 1.2
-    # 시세 조회 간격: 0.5초
-    _QUOTE_INTERVAL = 0.5
+    # 시세 조회 간격: 0.6초 (KIS 해외 API 과부하 방지, 초당 ~1.6건)
+    _QUOTE_INTERVAL = 0.6
 
     def __init__(self) -> None:
         self._access_token: str | None = None
         self._token_expires_at: datetime = datetime.min
-        self._client = httpx.AsyncClient(timeout=15.0, verify=False)
+        self._client = httpx.AsyncClient(timeout=20.0, verify=False)
         self._last_order_ts: float = 0.0
         self._last_quote_ts: float = 0.0
 
@@ -136,6 +137,45 @@ class KISOverseasBroker:
             "Content-Type": "application/json; charset=utf-8",
         }
 
+    # ── 중앙 재시도 헬퍼 ─────────────────────────────────────────────────────
+
+    async def _call_with_retry(
+        self,
+        make_request,
+        label: str,
+        retries: int = 4,
+    ) -> httpx.Response:
+        """HTTP 재시도 래퍼 — 429/500에 지수 백오프+jitter 적용.
+
+        make_request: async callable() → httpx.Response
+        다른 4xx/5xx는 즉시 raise.
+        """
+        last_exc: Exception = RuntimeError(f"[Night:KIS] API 재시도 초과: {label}")
+        for attempt in range(retries):
+            if attempt > 0:
+                base = min(attempt * 2.0, 8.0)
+                wait = base + random.uniform(0.0, 1.0)
+                logger.warning(f"[Night:KIS] {label} 재시도 {attempt}/{retries - 1} ({wait:.1f}s 대기)")
+                await asyncio.sleep(wait)
+            try:
+                resp = await make_request()
+                if resp.status_code in (429, 500):
+                    last_exc = httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}",
+                        request=resp.request,
+                        response=resp,
+                    )
+                    logger.warning(f"[Night:KIS] {label} HTTP {resp.status_code} (attempt {attempt + 1}/{retries})")
+                    continue
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[Night:KIS] {label} 네트워크 오류 (attempt {attempt + 1}/{retries}): {e}")
+        raise last_exc
+
     # ── Throttle ─────────────────────────────────────────────────────────────
 
     async def _throttle_order(self) -> None:
@@ -157,48 +197,27 @@ class KISOverseasBroker:
     # ── 시세 조회 ────────────────────────────────────────────────────────────
 
     async def get_quote(self, symbol: str, excd: str = "NAS") -> OverseasQuote:
-        """해외주식 현재가 조회 (TR: HHDFS76200200)
-        500 응답 시 최대 3회 재시도.
-        """
+        """해외주식 현재가 조회 (TR: HHDFS76200200)"""
         await self._throttle_quote()
-        last_exc: Exception = RuntimeError("get_quote retry exhausted")
-        for attempt in range(3):
-            if attempt > 0:
-                await asyncio.sleep(attempt)
-            try:
-                headers = await self._headers(_QUOTE_TR)
-                resp = await self._client.get(
-                    f"{self._base_url}/uapi/overseas-price/v1/quotations/price",
-                    headers=headers,
-                    params={
-                        "AUTH": "",
-                        "EXCD": excd,
-                        "SYMB": symbol,
-                    },
-                )
-                if resp.status_code == 500:
-                    last_exc = httpx.HTTPStatusError(
-                        f"500 (attempt {attempt + 1})",
-                        request=resp.request, response=resp,
-                    )
-                    logger.warning(f"[Night:KIS] {symbol} quote 500 — {attempt + 1}/3")
-                    continue
-                resp.raise_for_status()
-                output = resp.json().get("output", {})
-                return OverseasQuote(
-                    symbol=symbol,
-                    name=output.get("rsym", symbol),
-                    excd=excd,
-                    current_price=float(output.get("last", 0)),
-                    change_rate=float(output.get("rate", 0)),
-                    volume=int(float(output.get("tvol", 0))),
-                )
-            except httpx.HTTPStatusError:
-                raise
-            except Exception as e:
-                last_exc = e
-                logger.warning(f"[Night:KIS] {symbol} quote error (attempt {attempt + 1}): {e}")
-        raise last_exc
+
+        async def _req():
+            headers = await self._headers(_QUOTE_TR)
+            return await self._client.get(
+                f"{self._base_url}/uapi/overseas-price/v1/quotations/price",
+                headers=headers,
+                params={"AUTH": "", "EXCD": excd, "SYMB": symbol},
+            )
+
+        resp = await self._call_with_retry(_req, f"{symbol} 시세조회")
+        output = resp.json().get("output", {})
+        return OverseasQuote(
+            symbol=symbol,
+            name=output.get("rsym", symbol),
+            excd=excd,
+            current_price=float(output.get("last", 0)),
+            change_rate=float(output.get("rate", 0)),
+            volume=int(float(output.get("tvol", 0))),
+        )
 
     # ── 잔고 조회 ────────────────────────────────────────────────────────────
 
@@ -218,20 +237,23 @@ class KISOverseasBroker:
           }
         """
         tr_id = _BALANCE_TR[self._mode]
-        headers = await self._headers(tr_id)
-        resp = await self._client.get(
-            f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-balance",
-            headers=headers,
-            params={
-                "CANO": self._cano,
-                "ACNT_PRDT_CD": self._acnt_prdt_cd,
-                "OVRS_EXCG_CD": "NASD",
-                "TR_CRCY_CD": "USD",
-                "CTX_AREA_FK200": "",
-                "CTX_AREA_NK200": "",
-            },
-        )
-        resp.raise_for_status()
+
+        async def _req():
+            headers = await self._headers(tr_id)
+            return await self._client.get(
+                f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-balance",
+                headers=headers,
+                params={
+                    "CANO": self._cano,
+                    "ACNT_PRDT_CD": self._acnt_prdt_cd,
+                    "OVRS_EXCG_CD": "NASD",
+                    "TR_CRCY_CD": "USD",
+                    "CTX_AREA_FK200": "",
+                    "CTX_AREA_NK200": "",
+                },
+            )
+
+        resp = await self._call_with_retry(_req, "해외잔고조회")
         data = resp.json()
 
         # output1 → 정규화된 holdings 변환
@@ -272,19 +294,22 @@ class KISOverseasBroker:
     async def get_available_usd(self) -> float:
         """해외주식 주문 가능 USD 금액 조회"""
         tr_id = _BUYABLE_TR[self._mode]
-        headers = await self._headers(tr_id)
-        resp = await self._client.get(
-            f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-psamount",
-            headers=headers,
-            params={
-                "CANO": self._cano,
-                "ACNT_PRDT_CD": self._acnt_prdt_cd,
-                "OVRS_EXCG_CD": "NASD",
-                "OVRS_ORD_UNPR": "0",
-                "ITEM_CD": "",
-            },
-        )
-        resp.raise_for_status()
+
+        async def _req():
+            headers = await self._headers(tr_id)
+            return await self._client.get(
+                f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-psamount",
+                headers=headers,
+                params={
+                    "CANO": self._cano,
+                    "ACNT_PRDT_CD": self._acnt_prdt_cd,
+                    "OVRS_EXCG_CD": "NASD",
+                    "OVRS_ORD_UNPR": "0",
+                    "ITEM_CD": "",
+                },
+            )
+
+        resp = await self._call_with_retry(_req, "해외주문가능금액")
         data = resp.json()
         if data.get("rt_cd") != "0":
             logger.warning(f"[Night:KIS] available USD query failed: {data.get('msg1')}")
@@ -305,7 +330,6 @@ class KISOverseasBroker:
         """
         await self._throttle_order()
         tr_id = _BUY_TR[self._mode]
-        # 시장가/지정가 구분
         ord_dvsn = "00" if price > 0 else "01"
         _label = f"{name}({symbol})" if name else symbol
 
@@ -320,41 +344,25 @@ class KISOverseasBroker:
             "ORD_DVSN": ord_dvsn,
         }
 
-        last_exc: Exception = RuntimeError("buy retry exhausted")
-        for attempt in range(3):
-            if attempt > 0:
-                await asyncio.sleep(max(1, attempt))
-            try:
-                headers = await self._headers(tr_id)
-                resp = await self._client.post(
-                    f"{self._base_url}/uapi/overseas-stock/v1/trading/order",
-                    headers=headers, json=body,
-                )
-                if resp.status_code == 500:
-                    last_exc = httpx.HTTPStatusError(
-                        f"500 (attempt {attempt + 1})",
-                        request=resp.request, response=resp,
-                    )
-                    logger.warning(f"[Night:KIS] buy {_label} 500 — {attempt + 1}/3")
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                if data.get("rt_cd") != "0":
-                    raise RuntimeError(data.get("msg1", str(data)))
-                logger.info(f"[Night] BUY: {_label} {quantity}shares @ ${price:.2f}")
-                return OverseasOrderResult(
-                    order_id=data["output"]["ODNO"],
-                    symbol=symbol, excd=excd,
-                    side="BUY", quantity=quantity, price=price,
-                    status="SUBMITTED",
-                    timestamp=datetime.now(_KST),
-                )
-            except (httpx.HTTPStatusError, RuntimeError):
-                raise
-            except Exception as e:
-                last_exc = e
-                logger.warning(f"[Night:KIS] buy {_label} error (attempt {attempt + 1}): {e}")
-        raise last_exc
+        async def _req():
+            headers = await self._headers(tr_id)
+            return await self._client.post(
+                f"{self._base_url}/uapi/overseas-stock/v1/trading/order",
+                headers=headers, json=body,
+            )
+
+        resp = await self._call_with_retry(_req, f"매수 {_label}")
+        data = resp.json()
+        if data.get("rt_cd") != "0":
+            raise RuntimeError(data.get("msg1", str(data)))
+        logger.info(f"[Night] BUY: {_label} {quantity}shares @ ${price:.2f}")
+        return OverseasOrderResult(
+            order_id=data["output"]["ODNO"],
+            symbol=symbol, excd=excd,
+            side="BUY", quantity=quantity, price=price,
+            status="SUBMITTED",
+            timestamp=datetime.now(_KST),
+        )
 
     # ── 매도 ─────────────────────────────────────────────────────────────────
 
@@ -379,70 +387,57 @@ class KISOverseasBroker:
             "ORD_DVSN": ord_dvsn,
         }
 
-        last_exc: Exception = RuntimeError("sell retry exhausted")
-        for attempt in range(3):
-            if attempt > 0:
-                await asyncio.sleep(max(1, attempt))
-            try:
-                headers = await self._headers(tr_id)
-                resp = await self._client.post(
-                    f"{self._base_url}/uapi/overseas-stock/v1/trading/order",
-                    headers=headers, json=body,
-                )
-                if resp.status_code == 500:
-                    last_exc = httpx.HTTPStatusError(
-                        f"500 (attempt {attempt + 1})",
-                        request=resp.request, response=resp,
-                    )
-                    logger.warning(f"[Night:KIS] sell {_label} 500 — {attempt + 1}/3")
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                if data.get("rt_cd") != "0":
-                    raise RuntimeError(data.get("msg1", str(data)))
-                logger.info(f"[Night] SELL: {_label} {quantity}shares @ ${price:.2f}")
-                return OverseasOrderResult(
-                    order_id=data["output"]["ODNO"],
-                    symbol=symbol, excd=excd,
-                    side="SELL", quantity=quantity, price=price,
-                    status="SUBMITTED",
-                    timestamp=datetime.now(_KST),
-                )
-            except (httpx.HTTPStatusError, RuntimeError):
-                raise
-            except Exception as e:
-                last_exc = e
-                logger.warning(f"[Night:KIS] sell {_label} error (attempt {attempt + 1}): {e}")
-        raise last_exc
+        async def _req():
+            headers = await self._headers(tr_id)
+            return await self._client.post(
+                f"{self._base_url}/uapi/overseas-stock/v1/trading/order",
+                headers=headers, json=body,
+            )
+
+        resp = await self._call_with_retry(_req, f"매도 {_label}")
+        data = resp.json()
+        if data.get("rt_cd") != "0":
+            raise RuntimeError(data.get("msg1", str(data)))
+        logger.info(f"[Night] SELL: {_label} {quantity}shares @ ${price:.2f}")
+        return OverseasOrderResult(
+            order_id=data["output"]["ODNO"],
+            symbol=symbol, excd=excd,
+            side="SELL", quantity=quantity, price=price,
+            status="SUBMITTED",
+            timestamp=datetime.now(_KST),
+        )
 
     # ── 체결 조회 ────────────────────────────────────────────────────────────
 
     async def get_order_status(self, order_id: str) -> dict[str, Any]:
         """해외주식 체결 조회"""
         tr_id = _CCLD_TR[self._mode]
-        headers = await self._headers(tr_id)
         today = datetime.now(_KST).strftime("%Y%m%d")
-        resp = await self._client.get(
-            f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl",
-            headers=headers,
-            params={
-                "CANO": self._cano,
-                "ACNT_PRDT_CD": self._acnt_prdt_cd,
-                "PDNO": "",
-                "ORD_STRT_DT": today,
-                "ORD_END_DT": today,
-                "SLL_BUY_DVSN": "00",
-                "CCLD_NCCS_DVSN": "00",
-                "OVRS_EXCG_CD": "",
-                "SORT_SQN": "DS",
-                "ORD_DT": "",
-                "ORD_GNO_BRNO": "",
-                "ODNO": order_id,
-                "CTX_AREA_NK200": "",
-                "CTX_AREA_FK200": "",
-            },
-        )
-        resp.raise_for_status()
+
+        async def _req():
+            headers = await self._headers(tr_id)
+            return await self._client.get(
+                f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl",
+                headers=headers,
+                params={
+                    "CANO": self._cano,
+                    "ACNT_PRDT_CD": self._acnt_prdt_cd,
+                    "PDNO": "",
+                    "ORD_STRT_DT": today,
+                    "ORD_END_DT": today,
+                    "SLL_BUY_DVSN": "00",
+                    "CCLD_NCCS_DVSN": "00",
+                    "OVRS_EXCG_CD": "",
+                    "SORT_SQN": "DS",
+                    "ORD_DT": "",
+                    "ORD_GNO_BRNO": "",
+                    "ODNO": order_id,
+                    "CTX_AREA_NK200": "",
+                    "CTX_AREA_FK200": "",
+                },
+            )
+
+        resp = await self._call_with_retry(_req, f"체결조회 {order_id}", retries=3)
         data = resp.json()
         items = data.get("output", [])
         if not items:
@@ -462,7 +457,6 @@ class KISOverseasBroker:
     ) -> bool:
         """해외주식 주문 취소"""
         tr_id = _CANCEL_TR[self._mode]
-        headers = await self._headers(tr_id)
         body = {
             "CANO": self._cano,
             "ACNT_PRDT_CD": self._acnt_prdt_cd,
@@ -474,11 +468,15 @@ class KISOverseasBroker:
             "OVRS_ORD_UNPR": "0",
             "ORD_SVR_DVSN_CD": "0",
         }
-        resp = await self._client.post(
-            f"{self._base_url}/uapi/overseas-stock/v1/trading/order-rvsecncl",
-            headers=headers, json=body,
-        )
-        resp.raise_for_status()
+
+        async def _req():
+            headers = await self._headers(tr_id)
+            return await self._client.post(
+                f"{self._base_url}/uapi/overseas-stock/v1/trading/order-rvsecncl",
+                headers=headers, json=body,
+            )
+
+        resp = await self._call_with_retry(_req, f"주문취소 {order_id}", retries=2)
         data = resp.json()
         success = data.get("rt_cd") == "0"
         if success:
@@ -492,40 +490,43 @@ class KISOverseasBroker:
     async def get_volume_rank(self, excd: str = "NAS", count: int = 20) -> list[dict[str, Any]]:
         """해외주식 거래량 상위 종목 조회"""
         await self._throttle_quote()
-        headers = await self._headers(_VOLUME_RANK_TR)
-        resp = await self._client.get(
-            f"{self._base_url}/uapi/overseas-price/v1/quotations/inquire-search",
-            headers=headers,
-            params={
-                "AUTH": "",
-                "EXCD": excd,
-                "CO_YN_PRICECUR": "",
-                "CO_ST_PRICECUR": "",
-                "CO_EN_PRICECUR": "",
-                "CO_YN_RATE": "",
-                "CO_ST_RATE": "",
-                "CO_EN_RATE": "",
-                "CO_YN_VALX": "",
-                "CO_ST_VALX": "",
-                "CO_EN_VALX": "",
-                "CO_YN_SHAR": "",
-                "CO_ST_SHAR": "",
-                "CO_EN_SHAR": "",
-                "CO_YN_VOLUME": "1",
-                "CO_ST_VOLUME": "100000",
-                "CO_EN_VOLUME": "",
-                "CO_YN_AMT": "",
-                "CO_ST_AMT": "",
-                "CO_EN_AMT": "",
-                "CO_YN_EPS": "",
-                "CO_ST_EPS": "",
-                "CO_EN_EPS": "",
-                "CO_YN_PER": "",
-                "CO_ST_PER": "",
-                "CO_EN_PER": "",
-            },
-        )
-        resp.raise_for_status()
+
+        async def _req():
+            headers = await self._headers(_VOLUME_RANK_TR)
+            return await self._client.get(
+                f"{self._base_url}/uapi/overseas-price/v1/quotations/inquire-search",
+                headers=headers,
+                params={
+                    "AUTH": "",
+                    "EXCD": excd,
+                    "CO_YN_PRICECUR": "",
+                    "CO_ST_PRICECUR": "",
+                    "CO_EN_PRICECUR": "",
+                    "CO_YN_RATE": "",
+                    "CO_ST_RATE": "",
+                    "CO_EN_RATE": "",
+                    "CO_YN_VALX": "",
+                    "CO_ST_VALX": "",
+                    "CO_EN_VALX": "",
+                    "CO_YN_SHAR": "",
+                    "CO_ST_SHAR": "",
+                    "CO_EN_SHAR": "",
+                    "CO_YN_VOLUME": "1",
+                    "CO_ST_VOLUME": "100000",
+                    "CO_EN_VOLUME": "",
+                    "CO_YN_AMT": "",
+                    "CO_ST_AMT": "",
+                    "CO_EN_AMT": "",
+                    "CO_YN_EPS": "",
+                    "CO_ST_EPS": "",
+                    "CO_EN_EPS": "",
+                    "CO_YN_PER": "",
+                    "CO_ST_PER": "",
+                    "CO_EN_PER": "",
+                },
+            )
+
+        resp = await self._call_with_retry(_req, f"해외거래량순위({excd})")
         data = resp.json()
         items = data.get("output2", [])[:count]
         result = []

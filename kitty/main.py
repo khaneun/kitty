@@ -56,7 +56,7 @@ async def _collect_market_data(broker: KISBroker) -> dict:
             barometers.append(q.model_dump())
         except Exception as e:
             logger.debug(f"시장지표 {sym} 조회 실패: {e}")
-        await asyncio.sleep(0.2)  # KIS API rate limit 방지
+        # _throttle_quote()가 broker 내부에서 간격 보장 — 추가 sleep 불필요
 
     # 거래량 상위 종목
     volume_leaders: list[dict] = []
@@ -234,7 +234,7 @@ async def run_trading_cycle(
             quotes.append(q.model_dump())
         except Exception as e:
             logger.error(f"주가 조회 실패 {symbol}: {e}")
-        await asyncio.sleep(0.2)  # KIS API rate limit 방지 (초당 5건)
+        # _throttle_quote()가 broker 내부에서 0.25s 간격 보장
 
     # 4. 종목평가 (StockEvaluatorAgent) - 보유 종목
     stock_evaluation = await stock_evaluator.run({
