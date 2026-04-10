@@ -1256,13 +1256,20 @@ body{padding-bottom:80px}
 .cls-신규매수{background:#0d2d3d;color:#58a6ff}.cls-추가매수{background:#142814;color:#57ab5a}
 .cls-종목교체{background:#2d2500;color:#d29922}.cls-매도{background:#21262d;color:#8b949e}
 /* 매매일지 가로바 */
-.tr-bar-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 16px;margin-bottom:12px}
-.tr-bar-track{display:flex;height:18px;border-radius:6px;overflow:hidden;background:#21262d;gap:1px}
+.tr-bar-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:12px}
+.tr-bar-total{font-size:12px;color:#8b949e;margin-bottom:8px}
+.tr-bar-total strong{color:#c9d1d9;font-size:13px}
+.tr-bar-row{margin-bottom:6px}
+.tr-bar-row-lbl{font-size:10px;color:#484f58;margin-bottom:3px}
+.tr-bar-track{display:flex;height:14px;border-radius:4px;overflow:hidden;background:#21262d;gap:1px}
 .tr-bar-seg{height:100%;transition:width .3s;min-width:0}
-.tr-bar-labels{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap}
-.tr-bar-lbl{display:flex;align-items:center;gap:5px;font-size:12px;color:#8b949e}
-.tr-bar-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.tr-bar-cnt{font-weight:700;color:#c9d1d9;margin-left:2px}
+.tr-bar-labels{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap}
+.tr-bar-lbl{display:flex;align-items:center;gap:5px;font-size:11px;color:#8b949e}
+.tr-bar-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.tr-bar-cnt{font-weight:700;color:#c9d1d9;margin-left:1px}
+/* 매매일지 컬럼 너비 */
+table.log th:nth-child(3),table.log td:nth-child(3){width:72px}
+table.log th:nth-child(4),table.log td:nth-child(4){width:52px;text-align:center}
 </style>
 </head>
 <body>
@@ -1523,18 +1530,30 @@ body{padding-bottom:80px}
 <div id="tab-trades" class="tab-content">
 <div class="wrap">
   <div class="tr-bar-wrap">
-    <div class="tr-bar-track">
-      <div class="tr-bar-seg" id="tr-bar-buy"    style="background:#1c4a7a;width:0%"></div>
-      <div class="tr-bar-seg" id="tr-bar-profit" style="background:#1a4a1a;width:0%"></div>
-      <div class="tr-bar-seg" id="tr-bar-loss"   style="background:#4a1010;width:0%"></div>
-      <div class="tr-bar-seg" id="tr-bar-other"  style="background:#2d2f33;width:0%"></div>
+    <div class="tr-bar-total">전체 거래 <strong id="tr-total-cnt">-</strong>건</div>
+    <div class="tr-bar-row">
+      <div class="tr-bar-row-lbl">매수 / 매도</div>
+      <div class="tr-bar-track">
+        <div class="tr-bar-seg" id="tr-bar-buy"  style="background:#1c4a7a;width:0%"></div>
+        <div class="tr-bar-seg" id="tr-bar-sell" style="background:#2d2500;width:0%"></div>
+      </div>
+      <div class="tr-bar-labels">
+        <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#58a6ff"></div>매수 <span class="tr-bar-cnt" id="tr-buy-cnt">-</span></div>
+        <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#d29922"></div>매도 <span class="tr-bar-cnt" id="tr-sell-cnt">-</span></div>
+      </div>
     </div>
-    <div class="tr-bar-labels">
-      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#58a6ff"></div>매수 <span class="tr-bar-cnt" id="tr-buy-cnt">-</span></div>
-      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#3fb950"></div>익절 <span class="tr-bar-cnt" id="tr-profit-cnt">-</span></div>
-      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#f85149"></div>손절 <span class="tr-bar-cnt" id="tr-loss-cnt">-</span></div>
-      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#484f58"></div>기타매도 <span class="tr-bar-cnt" id="tr-other-cnt">-</span></div>
-      <div class="tr-bar-lbl" style="margin-left:auto"><div class="tr-bar-dot" style="background:#d29922"></div>전체 <span class="tr-bar-cnt" id="tr-total-cnt">-</span></div>
+    <div class="tr-bar-row" style="margin-top:10px">
+      <div class="tr-bar-row-lbl">익절 / 손절 / 기타</div>
+      <div class="tr-bar-track">
+        <div class="tr-bar-seg" id="tr-bar-profit" style="background:#1a4a1a;width:0%"></div>
+        <div class="tr-bar-seg" id="tr-bar-loss"   style="background:#4a1010;width:0%"></div>
+        <div class="tr-bar-seg" id="tr-bar-other"  style="background:#2d2f33;width:0%"></div>
+      </div>
+      <div class="tr-bar-labels">
+        <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#3fb950"></div>익절 <span class="tr-bar-cnt" id="tr-profit-cnt">-</span></div>
+        <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#f85149"></div>손절 <span class="tr-bar-cnt" id="tr-loss-cnt">-</span></div>
+        <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#484f58"></div>기타 <span class="tr-bar-cnt" id="tr-other-cnt">-</span></div>
+      </div>
     </div>
   </div>
   <div class="filters">
@@ -1554,7 +1573,6 @@ body{padding-bottom:80px}
       <option value="night">🌙 Night (해외)</option>
     </select>
     <button class="btn btn-pri" onclick="loadTrades()">조회</button>
-    <button class="btn" onclick="clearTradeFilter()">초기화</button>
   </div>
   <div class="meta" id="tr-meta"></div>
   <div class="tbl-wrap">
@@ -2294,17 +2312,21 @@ async function loadTrades(resetPage) {
     const losses  = trades.filter(t => t.classify === '손절').length;
     const others  = Math.max(0, sells - profits - losses);
     const total   = trades.length;
-    document.getElementById('tr-buy-cnt').textContent    = buys;
     document.getElementById('tr-total-cnt').textContent  = total;
+    document.getElementById('tr-buy-cnt').textContent    = buys;
+    document.getElementById('tr-sell-cnt').textContent   = sells;
     document.getElementById('tr-profit-cnt').textContent = profits;
     document.getElementById('tr-loss-cnt').textContent   = losses;
     document.getElementById('tr-other-cnt').textContent  = others;
-    // 가로바 세그먼트 너비
-    const pct = n => total > 0 ? (n / total * 100).toFixed(1)+'%' : '0%';
-    document.getElementById('tr-bar-buy').style.width    = pct(buys);
-    document.getElementById('tr-bar-profit').style.width = pct(profits);
-    document.getElementById('tr-bar-loss').style.width   = pct(losses);
-    document.getElementById('tr-bar-other').style.width  = pct(others);
+    // 가로바 1: 매수/매도
+    const pct1 = n => total > 0 ? (n / total * 100).toFixed(1)+'%' : '0%';
+    document.getElementById('tr-bar-buy').style.width    = pct1(buys);
+    document.getElementById('tr-bar-sell').style.width   = pct1(sells);
+    // 가로바 2: 익절/손절/기타 (매도 건 기준)
+    const pct2 = n => sells > 0 ? (n / sells * 100).toFixed(1)+'%' : '0%';
+    document.getElementById('tr-bar-profit').style.width = pct2(profits);
+    document.getElementById('tr-bar-loss').style.width   = pct2(losses);
+    document.getElementById('tr-bar-other').style.width  = pct2(others);
 
     renderTradesPage();
   } catch(e){ console.error('trades',e); }
