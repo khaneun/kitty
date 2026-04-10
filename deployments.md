@@ -77,6 +77,8 @@ docker run -d --name kitty-monitor -p 8080:8080 \
   -v $(pwd)/night-logs:/night-logs:ro \
   -v $(pwd)/reports:/reports:ro \
   -v $(pwd)/night-reports:/night-reports:ro \
+  -v $(pwd)/token_usage:/token_usage:ro \
+  -v $(pwd)/night-token_usage:/night-token_usage:ro \
   -v $(pwd)/commands:/commands:rw \
   -v monitor-data:/data \
   -e MONITOR_PASSWORD="$MONITOR_PASSWORD" \
