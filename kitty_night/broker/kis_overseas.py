@@ -366,11 +366,14 @@ class KISOverseasBroker:
         resp = await self._call_with_retry(_req, "해외주문가능금액")
         data = resp.json()
         if data.get("rt_cd") != "0":
-            logger.warning(f"[Night:KIS] available USD query failed: {data.get('msg1')}")
+            logger.warning(f"[Night:KIS] available USD query failed: rt_cd={data.get('rt_cd')} msg={data.get('msg1')}")
             return 0.0
         output = data.get("output", {})
+        # KIS API 일부 응답이 list로 오는 경우 방어 처리
+        if isinstance(output, list):
+            output = output[0] if output else {}
         usd = _sf(output.get("ovrs_ord_psbl_amt"))
-        logger.info(f"[Night:KIS] available USD: ${usd:,.2f}")
+        logger.info(f"[Night:KIS] available USD: ${usd:,.2f} (output keys: {list(output.keys()) if isinstance(output, dict) else 'list'})")
         return usd
 
     # ── 매수 ─────────────────────────────────────────────────────────────────

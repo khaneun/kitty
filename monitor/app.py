@@ -2167,7 +2167,7 @@ async function loadLlmHistory(page, init) {
       const ret = r.total_return!=null ? (r.total_return>=0?'+':'')+r.total_return.toFixed(2)+'%' : '-';
       const retColor = r.total_return==null?'#8b949e':r.total_return>=0?'#f85149':'#4493f8';
       return `<tr>
-        <td class="ts-col">${r.ts.slice(5,16)}</td>
+        <td class="ts-col">${r.ts.slice(5,16)} KST</td>
         <td style="color:#58a6ff">${esc(r.provider)}</td>
         <td style="font-size:11px">${esc(r.model)}</td>
         <td style="color:${retColor};font-weight:700">${ret}</td>
@@ -2237,7 +2237,7 @@ async function loadHealth() {
     } else {
       el.innerHTML = d.recent.map(e=>`
         <div class="recent-err">
-          <span class="ts">${e.ts.slice(5,16)}</span>
+          <span class="ts">${e.ts.slice(5,16)} KST</span>
           ${badge_(e.level)}
           <span class="msg">${esc(e.message.slice(0,100))}</span>
         </div>`).join('');
@@ -2303,7 +2303,7 @@ async function loadErrors(page) {
     tbody.innerHTML=d.rows.map(r=>{
       const mod=r.module.split(':')[0].split('.').slice(-2).join('.');
       return `<tr class="err-row-top">
-        <td><span class="ts-col">${r.ts.slice(5,16)}</span> ${badge(r.level)} <span style="font-size:11px;color:#8b949e" title="${esc(r.module)}">${esc(mod)}</span></td>
+        <td><span class="ts-col">${r.ts.slice(5,16)} KST</span> ${badge(r.level)} <span style="font-size:11px;color:#8b949e" title="${esc(r.module)}">${esc(mod)}</span></td>
       </tr><tr class="err-row-msg">
         <td><span class="err-msg-txt">${esc(r.message)}</span></td>
       </tr>`;
@@ -2963,7 +2963,7 @@ async function loadNightPortfolio() {
     pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtUSD(d.total_pnl) : '-';
     pnlEl.style.color = pnlColor(d.total_pnl||0);
     document.getElementById('nt-cash-val').textContent = d.available_cash != null ? fmtUSD(d.available_cash) : '-';
-    document.getElementById('nt-pf-ts').textContent = d.ts ? 'as of '+d.ts+' KST' : '';
+    document.getElementById('nt-pf-ts').textContent = d.ts ? '기준: '+d.ts+' KST' : '';
 
     const tbody = document.getElementById('nt-pf-tbody');
     if(!d.holdings || !d.holdings.length){

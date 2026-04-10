@@ -55,6 +55,7 @@ docker run -d \
   --restart unless-stopped \
   --log-opt max-size=10m --log-opt max-file=5 \
   --env-file /home/ec2-user/kitty/.env \
+  -e TZ=Asia/Seoul \
   -v /home/ec2-user/kitty/logs:/app/logs \
   -v /home/ec2-user/kitty/feedback:/app/feedback \
   -v /home/ec2-user/kitty/token_usage:/app/token_usage \
@@ -130,6 +131,7 @@ docker run -d \
   --restart unless-stopped \
   --log-opt max-size=10m --log-opt max-file=5 \
   --env-file /home/ec2-user/kitty/.env.night \
+  -e TZ=Asia/Seoul \
   -v /home/ec2-user/kitty/night-logs:/app/night-logs \
   -v /home/ec2-user/kitty/night-feedback:/app/night-feedback \
   -v /home/ec2-user/kitty/night-token_usage:/app/night-token_usage \
