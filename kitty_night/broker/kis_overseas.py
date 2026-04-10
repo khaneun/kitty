@@ -21,6 +21,16 @@ from kitty_night.utils import logger
 _KST = ZoneInfo("Asia/Seoul")
 
 
+def _sf(value: Any, default: float = 0.0) -> float:
+    """KIS API 숫자 필드를 안전하게 float 변환 (빈 문자열/None 허용)"""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 # ── 모델 ──────────────────────────────────────────────────────────────────────
 
 class OverseasQuote(BaseModel):
@@ -235,9 +245,9 @@ class KISOverseasBroker:
             symbol=symbol,
             name=output.get("rsym", symbol),
             excd=excd,
-            current_price=float(output.get("last", 0)),
-            change_rate=float(output.get("rate", 0)),
-            volume=int(float(output.get("tvol", 0))),
+            current_price=_sf(output.get("last")),
+            change_rate=_sf(output.get("rate")),
+            volume=int(_sf(output.get("tvol"))),
         )
 
     # ── 잔고 조회 ────────────────────────────────────────────────────────────
@@ -286,14 +296,14 @@ class KISOverseasBroker:
         # output1 → 정규화된 holdings 변환
         holdings: list[dict[str, Any]] = []
         for item in data.get("output1", []):
-            qty = int(float(item.get("ovrs_cblc_qty", 0)))
+            qty = int(_sf(item.get("ovrs_cblc_qty")))
             if qty <= 0:
                 continue
-            avg_price    = float(item.get("pchs_avg_pric", 0))
-            current_price = float(item.get("now_pric2", 0)) or avg_price
-            eval_amount  = float(item.get("ovrs_stck_evlu_amt", 0))
-            pnl_amount   = float(item.get("frcr_evlu_pfls_amt", 0))
-            pnl_rate     = float(item.get("evlu_pfls_rt", 0))
+            avg_price     = _sf(item.get("pchs_avg_pric"))
+            current_price = _sf(item.get("now_pric2")) or avg_price
+            eval_amount   = _sf(item.get("ovrs_stck_evlu_amt"))
+            pnl_amount    = _sf(item.get("frcr_evlu_pfls_amt"))
+            pnl_rate      = _sf(item.get("evlu_pfls_rt"))
             # eval_amount가 0이면 현재가 × 수량으로 추정
             if eval_amount == 0 and current_price > 0:
                 eval_amount = current_price * qty
@@ -342,7 +352,7 @@ class KISOverseasBroker:
             logger.warning(f"[Night:KIS] available USD query failed: {data.get('msg1')}")
             return 0.0
         output = data.get("output", {})
-        usd = float(output.get("ovrs_ord_psbl_amt", 0))
+        usd = _sf(output.get("ovrs_ord_psbl_amt"))
         logger.info(f"[Night:KIS] available USD: ${usd:,.2f}")
         return usd
 
@@ -473,9 +483,9 @@ class KISOverseasBroker:
             return {"filled_qty": 0, "remaining_qty": 0, "status": "UNKNOWN"}
         item = items[0]
         return {
-            "filled_qty": int(float(item.get("ft_ccld_qty", 0))),
-            "remaining_qty": int(float(item.get("nccs_qty", 0))),
-            "avg_price": float(item.get("ft_ccld_unpr3", 0)),
+            "filled_qty": int(_sf(item.get("ft_ccld_qty"))),
+            "remaining_qty": int(_sf(item.get("nccs_qty"))),
+            "avg_price": _sf(item.get("ft_ccld_unpr3")),
             "status": item.get("ord_stts", ""),
         }
 
@@ -564,9 +574,9 @@ class KISOverseasBroker:
                 "symbol": item.get("symb", ""),
                 "name": item.get("name", ""),
                 "excd": excd,
-                "current_price": float(item.get("last", 0)),
-                "change_rate": float(item.get("rate", 0)),
-                "volume": int(float(item.get("tvol", 0))),
+                "current_price": _sf(item.get("last")),
+                "change_rate": _sf(item.get("rate")),
+                "volume": int(_sf(item.get("tvol"))),
             })
         return result
 
