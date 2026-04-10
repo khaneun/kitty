@@ -542,6 +542,7 @@ async def main() -> None:
                     await run_trading_cycle(
                         broker,
                         sector_analyst,
+                        stock_screener,
                         stock_evaluator,
                         stock_picker,
                         asset_manager,
