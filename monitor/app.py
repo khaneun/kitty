@@ -1938,7 +1938,7 @@ async function loadAgentScores() {
         <div class="agent-card">
           <div class="agent-name">${agent}</div>
           <div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div>
-          <div class="agent-date">${latest.date}</div>
+          <div class="agent-date">${latest.date.slice(5)}</div>
           <button class="btn-prompt" onclick="onPromptClick(event,'${agent}',false)">프롬프트</button>
         </div>`;
     }).join('');
@@ -2047,7 +2047,7 @@ function showModal(ts, level, module, msg) {
   document.getElementById('modal').classList.add('show');
 }
 function showAgentModal(agent, date, score, summary, improvement) {
-  document.getElementById('modal-title').textContent = `${agent} — ${date} (${score}/100)`;
+  document.getElementById('modal-title').textContent = `${agent} — ${date.slice(5)} (${score}/100)`;
   document.getElementById('modal-body').textContent  =
     `📊 요약\n${summary||'없음'}\n\n💡 개선 포인트\n${improvement||'없음'}`;
   document.getElementById('modal').classList.add('show');
@@ -2068,7 +2068,7 @@ function showTradeDetail(i) {
   const srcLabel = isNight ? '🌙 Night (해외)' : '🐱 Kitty (국내)';
 
   document.getElementById('modal-title').textContent =
-    `${t.name||t.symbol} (${t.symbol}) — ${t.date} ${t.time}`;
+    `${t.name||t.symbol} (${t.symbol}) — ${t.date.slice(5)} ${t.time}`;
   document.getElementById('modal-body').innerHTML =
     `<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">` +
     `<tr><td style="color:#8b949e;padding:5px 0;width:80px">구분</td><td style="color:#c9d1d9">${srcLabel} / ${t.classify}</td></tr>` +
@@ -2317,7 +2317,7 @@ function renderTradesPage() {
     const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';
     const srcIcon = t.source==='night' ? '🌙' : '🐱';
     return `<tr>
-      <td class="ts-col">${srcIcon} ${t.date}<br><span style="color:#484f58">${t.time}</span></td>
+      <td class="ts-col">${srcIcon} ${t.date.slice(5)}<br><span style="color:#484f58">${t.time}</span></td>
       <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
       <td><span class="${clsCss}">${t.classify}</span></td>
       <td style="text-align:right;color:${pnlColor};font-weight:700">${pnlTxt}</td>
@@ -2455,7 +2455,7 @@ async function loadNightAgentScores() {
       if(!entries.length) return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:#484f58">-</div><div class="agent-date">No data</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
       const latest = entries[entries.length-1];
       const color = scoreColor(latest.score);
-      return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date}</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
+      return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date.slice(5)}</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
     }).join('');
 
     const thead = `<thead><tr><th>Agent</th>${allDates.map(d=>`<th>${d.slice(5)}</th>`).join('')}</tr></thead>`;
@@ -2499,7 +2499,7 @@ function renderAdvImprovements() {
     return `<div class="adv-agent-block">
       <div class="adv-agent-name">${esc(agent)}</div>
       ${items.map(it=>`<div class="adv-item">
-        <span class="adv-item-date">${esc(it.date)}</span>
+        <span class="adv-item-date">${esc(it.date.slice(5))}</span>
         <span class="adv-item-text">${esc(it.improvement)}</span>
       </div>`).join('')}
     </div>`;
