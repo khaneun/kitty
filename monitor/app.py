@@ -1496,7 +1496,7 @@ body{padding-bottom:80px}
       <option value="CRITICAL">CRITICAL</option>
     </select>
     <input type="text" id="f-q" placeholder="메시지 검색">
-    <button class="btn btn-pri" onclick="loadErrors()">조회</button>
+    <button class="btn btn-pri" onclick="_errPage=1;loadErrors()">조회</button>
   </div>
   <div class="meta" id="err-meta"></div>
   <div class="tbl-wrap">
@@ -1505,6 +1505,7 @@ body{padding-bottom:80px}
       <tbody id="err-tbody"></tbody>
     </table>
   </div>
+  <div id="err-pagination" style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:10px;"></div>
 </div>
 </div>
 
@@ -1580,23 +1581,23 @@ body{padding-bottom:80px}
   </div>
   <!-- Night 포트폴리오 -->
   <div class="section">
-    <div class="sec-title">Night Portfolio (USD)</div>
+    <div class="sec-title">포트폴리오 현황 (USD)</div>
     <div class="cards" id="nt-summary-cards" style="margin-bottom:10px">
-      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">Total Value</div><div class="num blue" style="font-size:17px" id="nt-total-eval">-</div></div>
-      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">P&L</div><div class="num" style="font-size:17px" id="nt-total-pnl">-</div></div>
-      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">Cash</div><div class="num gray" style="font-size:17px" id="nt-cash-val">-</div></div>
+      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">총평가금액</div><div class="num blue" style="font-size:17px" id="nt-total-eval">-</div></div>
+      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">평가손익</div><div class="num" style="font-size:17px" id="nt-total-pnl">-</div></div>
+      <div class="card" style="text-align:left;padding:10px 12px"><div class="lbl" style="margin-top:0;margin-bottom:5px">주문가능현금</div><div class="num gray" style="font-size:17px" id="nt-cash-val">-</div></div>
     </div>
     <div class="pf-wrap">
       <table class="pf">
-        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Price</th><th>P&L% ⓘ</th></tr></thead>
-        <tbody id="nt-pf-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+        <thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률 ⓘ</th></tr></thead>
+        <tbody id="nt-pf-tbody"><tr><td colspan="5" class="empty">로딩 중...</td></tr></tbody>
       </table>
     </div>
     <div style="font-size:10px;color:#484f58;margin-top:6px;text-align:right" id="nt-pf-ts"></div>
   </div>
   <div class="agent-grid" id="nt-agent-cards"></div>
   <div class="section">
-    <div class="sec-title">Night Agent Score Heatmap</div>
+    <div class="sec-title">에이전트 점수 히트맵</div>
     <div class="heatmap-wrap"><table class="heatmap" id="nt-heatmap"></table></div>
   </div>
 </div>
@@ -2213,17 +2214,28 @@ async function loadStats() {
   } catch(e){ console.error(e); }
 }
 
-async function loadErrors() {
+let _errPage = 1;
+const _ERR_PAGE_SIZE = 50;
+
+async function loadErrors(page) {
+  if(page !== undefined) _errPage = page;
   const date=document.getElementById('f-date').value,
         level=document.getElementById('f-level').value,
         q=document.getElementById('f-q').value.trim();
-  const p=new URLSearchParams({limit:200});
+  const offset = (_errPage - 1) * _ERR_PAGE_SIZE;
+  const p=new URLSearchParams({limit:_ERR_PAGE_SIZE, offset});
   if(date) p.set('date',date); if(level) p.set('level',level); if(q) p.set('q',q);
   try {
     const d = await fetch('/api/errors?'+p).then(r=>r.json());
-    document.getElementById('err-meta').textContent=`총 ${d.total}건 중 ${Math.min(d.total,200)}건`;
+    const totalPages = Math.max(1, Math.ceil(d.total / _ERR_PAGE_SIZE));
+    document.getElementById('err-meta').textContent=`총 ${d.total}건 (${_errPage}/${totalPages}페이지)`;
     const tbody=document.getElementById('err-tbody');
-    if(!d.rows.length){ tbody.innerHTML='<tr><td colspan="3" class="empty">에러 없음 ✅</td></tr>'; return; }
+    const pgEl=document.getElementById('err-pagination');
+    if(!d.rows.length){
+      tbody.innerHTML='<tr><td colspan="3" class="empty">에러 없음 ✅</td></tr>';
+      pgEl.innerHTML='';
+      return;
+    }
     _errData = d.rows;
     tbody.innerHTML=d.rows.map((r,i)=>{
       const mod=r.module.split(':')[0].split('.').slice(-2).join('.');
@@ -2233,6 +2245,11 @@ async function loadErrors() {
         <td title="${esc(r.module)}">${esc(mod)}</td>
       </tr>`;
     }).join('');
+    pgEl.innerHTML = `
+      <button class="btn" ${_errPage<=1?'disabled':''} onclick="loadErrors(${_errPage-1})">◀ 이전</button>
+      <span style="color:#8b949e;font-size:11px">${_errPage} / ${totalPages} 페이지</span>
+      <button class="btn" ${_errPage>=totalPages?'disabled':''} onclick="loadErrors(${_errPage+1})">다음 ▶</button>
+    `;
   } catch(e){ console.error(e); }
 }
 
@@ -2248,6 +2265,7 @@ function clearFilter(){
   document.getElementById('f-date').value=_kstDate();
   document.getElementById('f-level').value='';
   document.getElementById('f-q').value='';
+  _errPage = 1;
   loadErrors();
 }
 
@@ -2354,7 +2372,7 @@ async function loadPortfolio() {
     const pnlEl = document.getElementById('pf-total-pnl');
     pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtW(d.total_pnl) : '-';
     pnlEl.style.color = pnlColor(d.total_pnl||0);
-    document.getElementById('pf-cash').textContent = d.available_cash ? fmtW(d.available_cash) : '-';
+    document.getElementById('pf-cash').textContent = d.available_cash != null ? fmtW(d.available_cash) : '-';
     document.getElementById('pf-ts').textContent = d.ts ? '기준: '+d.ts+' KST' : '';
     if(d.ts) document.getElementById('upd-txt').textContent = '갱신 '+d.ts.slice(5,16)+' KST';
 
@@ -2888,12 +2906,12 @@ async function loadNightPortfolio() {
     const pnlEl = document.getElementById('nt-total-pnl');
     pnlEl.textContent = d.total_pnl !== undefined ? (d.total_pnl>=0?'+':'')+fmtUSD(d.total_pnl) : '-';
     pnlEl.style.color = pnlColor(d.total_pnl||0);
-    document.getElementById('nt-cash-val').textContent = d.available_cash ? fmtUSD(d.available_cash) : '-';
+    document.getElementById('nt-cash-val').textContent = d.available_cash != null ? fmtUSD(d.available_cash) : '-';
     document.getElementById('nt-pf-ts').textContent = d.ts ? 'as of '+d.ts+' KST' : '';
 
     const tbody = document.getElementById('nt-pf-tbody');
     if(!d.holdings || !d.holdings.length){
-      tbody.innerHTML='<tr><td colspan="5" class="empty">No holdings</td></tr>';
+      tbody.innerHTML='<tr><td colspan="5" class="empty">보유 종목 없음</td></tr>';
       return;
     }
     _ntPfDataMap = {};
@@ -2913,30 +2931,40 @@ async function loadNightPortfolio() {
   } catch(e){ console.error('night-portfolio',e); }
 }
 
+const _NIGHT_AGENT_KR = {
+  'NightSectorAnalyst': '섹터분석가',
+  'NightStockPicker':   '종목발굴가',
+  'NightStockEvaluator':'종목평가가',
+  'NightAssetManager':  '자산운용가',
+  'NightBuyExecutor':   '매수실행가',
+  'NightSellExecutor':  '매도실행가',
+};
+
 async function loadNightAgentScores() {
   try {
     const data = await fetch('/api/night/agent-scores').then(r=>r.json());
     const agents = Object.keys(data);
-    if(!agents.length){ document.getElementById('nt-agent-cards').innerHTML='<div class="empty">No night agent data yet</div>'; return; }
+    if(!agents.length){ document.getElementById('nt-agent-cards').innerHTML='<div class="empty">데이터 없음</div>'; return; }
     const allDates = [...new Set(agents.flatMap(a=>data[a].map(e=>e.date)))].sort().slice(-5);
 
     document.getElementById('nt-agent-cards').innerHTML = agents.map(agent=>{
       const entries = data[agent];
-      const shortName = agent.replace('Night','');
-      if(!entries.length) return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:#484f58">-</div><div class="agent-date">No data</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
+      const krName = _NIGHT_AGENT_KR[agent] || agent.replace('Night','');
+      if(!entries.length) return `<div class="agent-card"><div class="agent-name">${krName}</div><div class="agent-score" style="color:#484f58">-</div><div class="agent-date">데이터 없음</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
       const latest = entries[entries.length-1];
       const color = scoreColor(latest.score);
-      return `<div class="agent-card"><div class="agent-name">${shortName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date.slice(5)}</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
+      return `<div class="agent-card"><div class="agent-name">${krName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date.slice(5)}</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
     }).join('');
 
-    const thead = `<thead><tr><th>Agent</th>${allDates.map(d=>`<th>${d.slice(5)}</th>`).join('')}</tr></thead>`;
+    const thead = `<thead><tr><th>에이전트</th>${allDates.map(d=>`<th>${d.slice(5)}</th>`).join('')}</tr></thead>`;
     const tbody = `<tbody>${agents.map(agent=>{
       const scoreMap = Object.fromEntries(data[agent].map(e=>[e.date,e]));
+      const krName = _NIGHT_AGENT_KR[agent] || agent.replace('Night','');
       const cells = allDates.map(d=>{
         const e=scoreMap[d]; if(!e) return '<td class="s-none">-</td>';
         return `<td class="${scoreBg(e.score)}" title="${esc(e.summary||'')}" style="cursor:pointer">${e.score}</td>`;
       }).join('');
-      return `<tr><td>${agent.replace('Night','')}</td>${cells}</tr>`;
+      return `<tr><td>${krName}</td>${cells}</tr>`;
     }).join('')}</tbody>`;
     document.getElementById('nt-heatmap').innerHTML = thead + tbody;
   } catch(e){ console.error('night-agent-scores',e); }

@@ -47,26 +47,38 @@ class NightSellExecutorAgent(NightBaseAgent):
         chunk_results: list[dict[str, Any]] = []
         _label = f"{name}({symbol})" if name else symbol
 
-        # HIGH priority: immediate market order
+        # HIGH priority: immediate market order (모의투자는 시세 조회 실패 시 재시도)
         if priority == "HIGH":
             logger.info(f"[Night:SellExecutor] {_label} URGENT stop-loss — market sell {quantity} shares")
-            try:
-                order = await self.broker.sell(symbol, excd, quantity, 0)
-                chunk_results.append({
-                    "symbol": symbol,
-                    "order_id": order.order_id,
-                    "status": "SUBMITTED",
-                    "quantity": quantity,
-                    "price": 0,
-                    "chunk": 1,
-                })
-            except Exception as e:
-                logger.error(f"[Night:SellExecutor] {_label} urgent sell failed: {e}")
+            last_exc: Exception | None = None
+            for _attempt in range(3):
+                try:
+                    order = await self.broker.sell(symbol, excd, quantity, 0)
+                    chunk_results.append({
+                        "symbol": symbol,
+                        "order_id": order.order_id,
+                        "status": "SUBMITTED",
+                        "quantity": quantity,
+                        "price": 0,
+                        "chunk": 1,
+                    })
+                    last_exc = None
+                    break
+                except Exception as e:
+                    last_exc = e
+                    if _attempt < 2:
+                        logger.warning(
+                            f"[Night:SellExecutor] {_label} urgent sell attempt {_attempt + 1} failed: {e} — retrying"
+                        )
+                        await asyncio.sleep(2.0)
+                    else:
+                        logger.error(f"[Night:SellExecutor] {_label} urgent sell failed: {e}")
+            if last_exc is not None:
                 chunk_results.append({
                     "symbol": symbol,
                     "status": "FAILED",
                     "quantity": quantity,
-                    "reason": str(e),
+                    "reason": str(last_exc),
                     "chunk": 1,
                 })
             return chunk_results

@@ -103,11 +103,13 @@ class NightPerformanceEvaluator:
     def _eval_sector_analyst(self, report: NightDailyReport, eod: dict) -> dict:
         hits, total = 0, 0
         detail_lines = []
+        neutral_count = 0
 
         for c in report.cycles:
             for s in c.market_analysis.get("sectors", []):
                 trend = s.get("trend")
                 if trend == "neutral":
+                    neutral_count += 1
                     continue
                 candidates = [sym for sym in s.get("candidate_symbols", []) if sym in eod]
                 if not candidates:
@@ -122,13 +124,33 @@ class NightPerformanceEvaluator:
                 )
 
         if total == 0:
-            return {}
+            # 방향성 예측 없음(전 섹터 neutral 또는 EOD 가격 없음) — 기본 점수 부여
+            sector_count = sum(
+                len(c.market_analysis.get("sectors", [])) for c in report.cycles
+            )
+            if sector_count == 0:
+                return {}
+            neutral_lines = [
+                f"  {s.get('name','?')} neutral"
+                for c in report.cycles
+                for s in c.market_analysis.get("sectors", [])
+            ]
+            return {
+                "score": 50,
+                "accuracy": None,
+                "hits": 0,
+                "total": 0,
+                "neutral_sectors": neutral_count,
+                "note": "All sectors neutral — no directional calls to evaluate",
+                "decision_details": "\n".join(neutral_lines[:10]),
+            }
 
         acc = hits / total
         return {
             "score": min(100, round(acc * 100 + 10)),
             "accuracy": round(acc, 2),
             "hits": hits, "total": total,
+            "neutral_sectors": neutral_count,
             "decision_details": "\n".join(detail_lines),
         }
 

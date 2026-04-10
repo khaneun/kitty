@@ -432,6 +432,10 @@ class KISOverseasBroker:
         # 모의투자는 시장가 주문 미지원 → 공격적 지정가로 대체
         if price == 0.0 and self._mode == "paper":
             price = await self._paper_aggressive_price(symbol, excd, "SELL")
+            if price <= 0.0:
+                raise RuntimeError(
+                    f"모의투자 매도 불가 ({symbol}): 시세 조회 실패로 지정가 산출 불가"
+                )
             logger.info(f"[Night:KIS] 모의투자 매도 시장가→지정가 대체: {symbol} @ ${price:.2f}")
 
         await self._throttle_order()
