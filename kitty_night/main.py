@@ -356,6 +356,19 @@ def _format_tendency_update(profile: dict) -> str:
 
 
 async def main() -> None:
+    # 시작 시 저장된 모드 설정 복원 (컨테이너 재시작 후에도 live 유지)
+    _NIGHT_MODE_CFG = Path("night-commands/night_mode_config.json")
+    if _NIGHT_MODE_CFG.exists():
+        try:
+            cfg = json.loads(_NIGHT_MODE_CFG.read_text(encoding="utf-8"))
+            saved_mode = cfg.get("mode", "")
+            if saved_mode in ("paper", "live"):
+                from kitty_night.config import TradingMode
+                night_settings.trading_mode = TradingMode(saved_mode)
+                logger.info(f"[Night] 저장된 모드 복원: {saved_mode}")
+        except Exception as e:
+            logger.warning(f"[Night] 모드 설정 파일 읽기 실패: {e}")
+
     logger.info(f"🌙 Kitty Night Mode starting — mode: {night_settings.trading_mode.value}")
 
     broker = KISOverseasBroker()
