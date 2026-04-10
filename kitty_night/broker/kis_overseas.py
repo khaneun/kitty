@@ -358,13 +358,31 @@ class KISOverseasBroker:
 
     # ── 매수 ─────────────────────────────────────────────────────────────────
 
+    async def _paper_aggressive_price(self, symbol: str, excd: str, side: str) -> float:
+        """모의투자용 공격적 지정가 산출 — 현재가 기준 BUY +0.5%, SELL -0.5%"""
+        try:
+            quote = await self.get_quote(symbol, excd)
+            if side == "BUY":
+                return round(quote.current_price * 1.005, 2)
+            else:
+                return round(quote.current_price * 0.995, 2)
+        except Exception as e:
+            logger.warning(f"[Night:KIS] 모의투자 지정가 산출 실패 ({symbol}): {e}")
+            return 0.0
+
     async def buy(
         self, symbol: str, excd: str, quantity: int,
         price: float = 0.0, name: str = "",
     ) -> OverseasOrderResult:
         """해외주식 매수 주문. price=0이면 시장가(01), 아니면 지정가(00).
+        모의투자는 시장가 미지원 → 현재가 +0.5% 공격적 지정가로 자동 변환.
         연속 주문 제한 1.2초 간격 보장.
         """
+        # 모의투자는 시장가 주문 미지원 → 공격적 지정가로 대체
+        if price == 0.0 and self._mode == "paper":
+            price = await self._paper_aggressive_price(symbol, excd, "BUY")
+            logger.info(f"[Night:KIS] 모의투자 매수 시장가→지정가 대체: {symbol} @ ${price:.2f}")
+
         await self._throttle_order()
         tr_id = _BUY_TR[self._mode]
         ord_dvsn = "00" if price > 0 else "01"
@@ -408,7 +426,14 @@ class KISOverseasBroker:
         self, symbol: str, excd: str, quantity: int,
         price: float = 0.0, name: str = "",
     ) -> OverseasOrderResult:
-        """해외주식 매도 주문"""
+        """해외주식 매도 주문.
+        모의투자는 시장가 미지원 → 현재가 -0.5% 공격적 지정가로 자동 변환.
+        """
+        # 모의투자는 시장가 주문 미지원 → 공격적 지정가로 대체
+        if price == 0.0 and self._mode == "paper":
+            price = await self._paper_aggressive_price(symbol, excd, "SELL")
+            logger.info(f"[Night:KIS] 모의투자 매도 시장가→지정가 대체: {symbol} @ ${price:.2f}")
+
         await self._throttle_order()
         tr_id = _SELL_TR[self._mode]
         ord_dvsn = "00" if price > 0 else "01"
