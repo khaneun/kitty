@@ -51,39 +51,37 @@ git pull origin main
 
 monitor/app.py 또는 monitor/ 관련 파일 변경 시.
 
+> ⚠️ **반드시 `cd /home/ec2-user/kitty` 후 실행할 것.**
+> `docker run`의 `-v $(pwd)/...` 가 현재 디렉토리 기준이므로, 다른 디렉토리에서 실행하면
+> 볼륨이 엉뚱한 경로(예: `/home/ec2-user/feedback`)에 마운트되어 성적표·매매일지 등 **모든 데이터가 빈값**으로 보임.
+
 ```bash
-# EC2 SSH 접속 후
+# EC2 SSH 접속 후 — 반드시 kitty 디렉토리로 이동
 cd /home/ec2-user/kitty
 
 # Secrets Manager에서 환경변수 추출
-MONITOR_PASSWORD=$(aws secretsmanager get-secret-value --secret-id kitty/prod \
-  --query SecretString --output text | python3 -c \
-  "import sys,json; d=json.load(sys.stdin); print(d.get('MONITOR_PASSWORD',''))")
-TELEGRAM_BOT_TOKEN=$(aws secretsmanager get-secret-value --secret-id kitty/prod \
-  --query SecretString --output text | python3 -c \
-  "import sys,json; d=json.load(sys.stdin); print(d.get('TELEGRAM_BOT_TOKEN',''))")
-TELEGRAM_CHAT_ID=$(aws secretsmanager get-secret-value --secret-id kitty/prod \
-  --query SecretString --output text | python3 -c \
-  "import sys,json; d=json.load(sys.stdin); print(d.get('TELEGRAM_CHAT_ID',''))")
+SECRET=$(aws secretsmanager get-secret-value --secret-id kitty/prod \
+  --region ap-northeast-2 --query SecretString --output text)
+MONITOR_PASSWORD=$(echo $SECRET | python3 -c \
+  "import sys,json; print(json.load(sys.stdin).get('MONITOR_PASSWORD',''))")
 
 # 이미지 빌드
 docker build -t kitty-monitor ./monitor
 
 # 컨테이너 교체
 docker stop kitty-monitor && docker rm kitty-monitor
-docker run -d --name kitty-monitor --restart unless-stopped \
+docker run -d --name kitty-monitor -p 8080:8080 \
+  -v $(pwd)/feedback:/feedback:rw \
+  -v $(pwd)/night-feedback:/night-feedback:rw \
   -v $(pwd)/logs:/logs:ro \
-  -v $(pwd)/feedback:/feedback:ro \
-  -v $(pwd)/token_usage:/token_usage:ro \
-  -v $(pwd)/commands:/commands \
-  -v $(pwd)/monitor-data:/data \
+  -v $(pwd)/night-logs:/night-logs:ro \
+  -v $(pwd)/commands:/commands:rw \
+  -v monitor-data:/data \
   -e MONITOR_PASSWORD="$MONITOR_PASSWORD" \
-  -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
-  -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
-  -p 8080:8080 kitty-monitor
+  kitty-monitor
 
-# 정상 확인
-sleep 5 && curl -s http://localhost:8080/health
+# 볼륨 경로 정상 확인 (/home/ec2-user/kitty/... 이어야 함)
+docker inspect kitty-monitor --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'
 ```
 
 ---
@@ -233,3 +231,4 @@ NIGHT_KIS_PAPER_ACCOUNT_NUMBER
 - **포트 8080 독점** — kitty-monitor 외 다른 프로세스가 8080을 쓰는 경우 `ss -tlnp | grep 8080` 으로 확인
 - **.env 파일** — start.sh가 실행 도중 임시 생성 후 자동 삭제. Git에 커밋 금지
 - **실전/모의 전환** — Telegram `/setmode live` 또는 모니터 GNB 셀렉터 사용. `.env` 직접 편집 불필요
+- **docker run은 반드시 `cd ~/kitty` 후 실행** — `-v $(pwd)/...` 볼륨 경로가 실행 디렉토리 기준임. 홈 디렉토리(`~`)나 다른 경로에서 실행하면 볼륨이 잘못 마운트되어 대시보드 데이터 전체가 빈값으로 보임. 재배포 후 `docker inspect kitty-monitor --format '{{range .Mounts}}{{.Source}}{{println}}{{end}}'` 로 경로가 `/home/ec2-user/kitty/...` 인지 반드시 확인할 것
