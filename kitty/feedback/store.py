@@ -2,17 +2,26 @@
 
 각 에이전트별 JSON 파일에 최근 MAX_ENTRIES일 피드백을 누적 저장하고,
 system_prompt에 주입할 텍스트를 생성한다.
+
+누적 요약 시스템:
+  - 최근 14일 원본 엔트리 보관
+  - 반복되는 개선사항 → "반복 이슈" (2회 이상 유사 키워드)
+  - 검증된 좋은 패턴 → "검증된 규칙" (2회 이상 반복)
+  - 프롬프트 주입 시: 검증된 규칙 > 반복 이슈 > 최근 3일 상세 피드백
 """
 import json
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from kitty.utils import logger
 
 FEEDBACK_DIR = Path("feedback")
-MAX_ENTRIES = 14   # 보관할 최대 일수 (2주)
-PROMPT_ENTRIES = 5  # system_prompt에 노출할 최근 N일
+MAX_ENTRIES = 14
+PROMPT_RECENT = 3
+RECURRING_THRESHOLD = 2
+LEARNED_THRESHOLD = 2
 
 
 def _path(agent_name: str) -> Path:
@@ -34,12 +43,10 @@ def load_entries(agent_name: str) -> list[dict[str, Any]]:
 def append_entry(agent_name: str, entry: dict[str, Any]) -> None:
     """새 평가 항목 추가 (날짜가 같으면 덮어씀). 원자적 쓰기로 파일 손상 방지."""
     entries = load_entries(agent_name)
-    # 같은 날짜 항목 교체
     entries = [e for e in entries if e.get("date") != entry.get("date")]
     entries.append(entry)
     entries = entries[-MAX_ENTRIES:]
     target = _path(agent_name)
-    # 원자적 쓰기: 임시 파일에 먼저 쓴 후 rename (동시 쓰기 시 JSON 손상 방지)
     try:
         fd = tempfile.NamedTemporaryFile(
             mode="w", suffix=".tmp", dir=target.parent, delete=False, encoding="utf-8"
@@ -56,44 +63,137 @@ def append_entry(agent_name: str, entry: dict[str, Any]) -> None:
         )
 
 
-def get_feedback_prompt(agent_name: str) -> str:
-    """system_prompt 끝에 주입할 피드백 블록 반환. 없으면 빈 문자열.
+# ── 누적 요약 분석 ──────────────────────────────────────────────────────────────
 
-    포함 정보:
-    - 점수 추이 (최근 7일)
-    - 최근 N일 피드백 (요약 + 유지할 패턴 + 개선점)
-    - 최우선 개선 과제 (최근 3일 중복 제거)
-    """
+def _extract_keywords(text: str) -> set[str]:
+    """피드백 텍스트에서 핵심 키워드/구문을 추출"""
+    if not text:
+        return set()
+    words = text.lower().replace(",", " ").replace(".", " ").replace("—", " ").split()
+    stop_words = {
+        "있습니다", "합니다", "입니다", "됩니다", "하세요", "해야", "필요",
+        "것을", "위해", "경우", "때문", "시에", "으로", "에서", "대한",
+        "이상", "이하", "이후", "보다", "때의", "점수", "달성",
+        "the", "a", "an", "is", "and", "or", "for", "to", "of", "in",
+    }
+    filtered = [w for w in words if w not in stop_words and len(w) > 1]
+    keywords: set[str] = set()
+    for i in range(len(filtered)):
+        keywords.add(filtered[i])
+        if i + 1 < len(filtered):
+            keywords.add(f"{filtered[i]} {filtered[i+1]}")
+    return keywords
+
+
+def _find_recurring_patterns(
+    items: list[str], threshold: int = RECURRING_THRESHOLD,
+) -> list[str]:
+    """유사한 피드백을 그룹핑하여 반복 패턴을 찾음"""
+    if len(items) < threshold:
+        return []
+
+    item_keywords = [(item, _extract_keywords(item)) for item in items]
+
+    bigram_counter: Counter[str] = Counter()
+    for _, kws in item_keywords:
+        bigrams = [k for k in kws if " " in k]
+        bigram_counter.update(bigrams)
+
+    recurring: list[str] = []
+    used_indices: set[int] = set()
+
+    for bigram, count in bigram_counter.most_common():
+        if count < threshold:
+            break
+        for idx in range(len(items) - 1, -1, -1):
+            if idx not in used_indices and bigram in _extract_keywords(items[idx]):
+                recurring.append(f"({count}회 반복) {items[idx]}")
+                used_indices.add(idx)
+                break
+
+    word_counter: Counter[str] = Counter()
+    for _, kws in item_keywords:
+        singles = [k for k in kws if " " not in k and len(k) > 2]
+        word_counter.update(singles)
+
+    for word, count in word_counter.most_common(5):
+        if count < threshold + 1:
+            break
+        for idx in range(len(items) - 1, -1, -1):
+            if idx not in used_indices and word in items[idx].lower():
+                recurring.append(f"({count}회 반복) {items[idx]}")
+                used_indices.add(idx)
+                break
+
+    return recurring[:5]
+
+
+def _build_accumulated_summary(entries: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """전체 엔트리에서 누적 요약 생성"""
+    improvements = [e["improvement"] for e in entries if e.get("improvement")]
+    good_patterns = [e["good_pattern"] for e in entries if e.get("good_pattern")]
+
+    return {
+        "recurring_issues": _find_recurring_patterns(improvements),
+        "learned_rules": _find_recurring_patterns(good_patterns, LEARNED_THRESHOLD),
+    }
+
+
+# ── 프롬프트 생성 ────────────────────────────────────────────────────────────────
+
+def get_feedback_prompt(agent_name: str) -> str:
+    """system_prompt 끝에 주입할 누적 피드백 블록 반환. 없으면 빈 문자열."""
     entries = load_entries(agent_name)
     if not entries:
         return ""
 
-    # 점수 추이 (최근 7일)
+    # ── 1. 점수 트렌드 ──────────────────────────────────────────────────────────
     all_scores = [e.get("score", "?") for e in entries]
     trend_str = " → ".join(str(s) for s in all_scores[-7:])
 
-    # 추이 방향 판단
     recent_scores = [s for s in all_scores[-5:] if isinstance(s, (int, float))]
+    avg_score = sum(recent_scores) / len(recent_scores) if recent_scores else 50
     if len(recent_scores) >= 3:
         first_half = sum(recent_scores[:len(recent_scores) // 2]) / max(1, len(recent_scores) // 2)
-        second_half = sum(recent_scores[len(recent_scores) // 2:]) / max(1, len(recent_scores) - len(recent_scores) // 2)
+        second_half = sum(recent_scores[len(recent_scores) // 2:]) / max(
+            1, len(recent_scores) - len(recent_scores) // 2
+        )
         if second_half > first_half + 5:
-            trend_icon = "📈 개선 중"
+            trend_label = "📈 개선 중"
         elif second_half < first_half - 5:
-            trend_icon = "📉 하락 중 — 개선 시급"
+            trend_label = "📉 하락 중 — 개선 시급"
         else:
-            trend_icon = "➡️ 유지"
+            trend_label = "➡️ 유지"
     else:
-        trend_icon = ""
+        trend_label = ""
 
     lines = [
         "",
-        "[📊 과거 성과 피드백 — 아래를 참고해 판단을 지속적으로 개선하세요]",
-        f"점수 추이: {trend_str} {trend_icon}",
+        "=" * 60,
+        "[누적 성과 피드백]",
+        f"점수 추이 (최근 7일): {trend_str} {trend_label}",
+        f"최근 5일 평균: {avg_score:.0f}/100",
+        "",
     ]
 
-    # 최근 N일 피드백 (최신 순)
-    recent = entries[-PROMPT_ENTRIES:]
+    # ── 2. 누적 요약: 검증된 규칙 + 반복 이슈 ─────────────────────────────────
+    accumulated = _build_accumulated_summary(entries)
+
+    if accumulated["learned_rules"]:
+        lines.append("[검증된 좋은 패턴 — 반드시 유지하세요]")
+        for rule in accumulated["learned_rules"]:
+            lines.append(f"  ✅ {rule}")
+        lines.append("")
+
+    if accumulated["recurring_issues"]:
+        lines.append("[반복 이슈 — 최우선으로 개선하세요]")
+        for issue in accumulated["recurring_issues"]:
+            lines.append(f"  ⚠️ {issue}")
+        lines.append("")
+
+    # ── 3. 최근 상세 피드백 ──────────────────────────────────────────────────────
+    recent = entries[-PROMPT_RECENT:]
+    lines.append(f"[최근 {len(recent)}일 상세 피드백]")
     for e in reversed(recent):
         score = e.get("score", "?")
         date = e.get("date", "")
@@ -101,17 +201,20 @@ def get_feedback_prompt(agent_name: str) -> str:
         improvement = e.get("improvement", "")
         good_pattern = e.get("good_pattern", "")
 
-        lines.append(f"\n• {date} ({score}/100): {summary}")
+        score_bar = "█" * (score // 10) + "░" * (10 - score // 10) if isinstance(score, (int, float)) else ""
+        lines.append(f"\n  [{date}] {score_bar} {score}/100")
+        if summary:
+            lines.append(f"    요약: {summary}")
         if good_pattern:
-            lines.append(f"  ✅ 유지: {good_pattern}")
+            lines.append(f"    ✅ 유지: {good_pattern}")
         if improvement:
-            lines.append(f"  💡 개선: {improvement}")
+            lines.append(f"    🔧 개선: {improvement}")
 
-    # 최우선 개선 과제 (최근 3일, 중복 제거)
-    recent_improvements = [e["improvement"] for e in entries[-3:] if e.get("improvement")]
-    seen: set[str] = set()
-    unique = [i for i in recent_improvements if not (i in seen or seen.add(i))]  # type: ignore[func-returns-value]
-    if unique:
-        lines.append(f"\n[최우선 개선 과제] {' / '.join(unique)}")
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append(
+        "검증된 패턴을 유지하고, 반복 이슈를 최우선으로 개선하세요. "
+        "이 피드백은 실제 성과 데이터에서 누적 도출된 것입니다."
+    )
 
     return "\n".join(lines)

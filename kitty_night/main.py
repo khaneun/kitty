@@ -286,13 +286,45 @@ async def run_trading_cycle(
         "portfolio": portfolio_for_agents,
         "quotes": quotes,
     })
-    buy_result = await buy_executor.run({"final_orders": final_orders, "quotes": quotes})
+    buy_result = await buy_executor.run({
+        "final_orders": final_orders,
+        "quotes": quotes,
+        "available_cash_usd": available_usd,
+    })
 
     buy_results = buy_result.get("buy_results", [])
     sell_results = sell_result.get("sell_results", [])
     daily_report.record_executions(buy_results, sell_results)
     _save_agent_context("NightBuyExecutor", {"buy_results": buy_results})
     _save_agent_context("NightSellExecutor", {"sell_results": sell_results})
+
+    # 9. 매매 실행 후 포트폴리오 스냅샷 갱신
+    any_executed = any(
+        r.get("status") not in ("SKIPPED", "FAILED")
+        for r in buy_results + sell_results
+    )
+    if any_executed:
+        try:
+            post_balance = await broker.get_balance()
+            post_holdings = post_balance.get("holdings", [])
+            post_available = await broker.get_available_usd()
+            post_total_eval = sum(
+                float(h.get("eval_amount", 0)) for h in post_holdings
+            ) + post_available
+            post_total_pnl = sum(float(h.get("pnl_amount", 0)) for h in post_holdings)
+            save_portfolio_snapshot(
+                trading_mode=night_settings.trading_mode.value,
+                available_usd=post_available,
+                total_eval_usd=post_total_eval,
+                total_pnl_usd=post_total_pnl,
+                holdings=post_holdings,
+            )
+            logger.info(
+                f"[Night] Post-trade snapshot updated: "
+                f"{len(post_holdings)} holdings, cash ${post_available:,.2f}"
+            )
+        except Exception as e:
+            logger.warning(f"[Night] Post-trade snapshot update failed: {e}")
 
     # Telegram trade reports (market orders fall back to quote reference price)
     night_quote_map = {q["symbol"]: q for q in quotes}

@@ -8,18 +8,35 @@ from kitty_night.utils import logger
 
 from .base import NightBaseAgent
 
-SYSTEM_PROMPT = """You are a US stock sell execution specialist.
+SYSTEM_PROMPT = """You are the Sell Execution Specialist for a US stock automated trading system.
 
-Role:
-- Execute sell orders from the Asset Manager
-- Execute stop-loss orders immediately when triggered
-- Execute take-profit orders at target prices
-- Use split selling when beneficial for execution quality
+━━━ MISSION ━━━
+Execute sell orders with speed (for stop-loss) or optimal price (for take-profit).
+You do NOT decide what to sell — the Asset Manager already decided that.
+Your job is to execute efficiently and report results accurately.
 
-Principles:
-- On trading halt / extreme circuit breaker, queue for next available window
-- Execute stop-loss mechanically without emotion
-- For low-volume stocks, adjust limit price slightly for better fills
+━━━ EXECUTION STRATEGY BY PRIORITY ━━━
+
+HIGH Priority (stop-loss / emergency):
+  → Immediate market order, NO splitting, NO waiting
+  → Speed > price. Get out NOW. 3 retry attempts.
+  → Used for: hard stop, emergency stop, extreme drops
+
+NORMAL Priority (take-profit / rotation):
+  → Limit order at current price × 0.998 (slight discount for fill certainty)
+  → Wait 10 seconds, check fill
+  → If not filled → cancel, retry as market order
+  → Split into 2-3 chunks for quantity > 10 shares
+
+━━━ PRE-FLIGHT CHECKS (handled by code, not AI) ━━━
+- Holding validation: verify shares are actually held before selling
+- Quantity cap: never sell more than actual holding quantity
+- Double-sell prevention: track cumulative sold quantity per symbol
+- Extreme drop override: stock down ≥ 15% → force HIGH priority market sell
+
+━━━ REPORTING ━━━
+Each execution result includes: symbol, order_id, status, quantity, price, chunk number.
+Status values: FILLED (confirmed), SUBMITTED (sent), SKIPPED (pre-flight fail), FAILED (error).
 """
 
 
@@ -199,6 +216,14 @@ class NightSellExecutorAgent(NightBaseAgent):
         all_chunk_results: list[dict[str, Any]] = []
         quote_map = {q["symbol"]: q for q in context.get("quotes", [])}
 
+        # 보유수량 맵 구성 (매도 검증용)
+        portfolio = context.get("portfolio", [])
+        holding_qty_map: dict[str, int] = {
+            p.get("symbol", ""): int(p.get("quantity", 0)) for p in portfolio
+        }
+        # 동일 종목 복수 매도 주문 시 누적 차감 추적
+        sold_qty_map: dict[str, int] = {}
+
         for order in sell_orders:
             symbol = order["symbol"]
             excd = order.get("excd", "NAS")
@@ -210,6 +235,28 @@ class NightSellExecutorAgent(NightBaseAgent):
             quote = quote_map.get(symbol)
             name = order.get("name", "") or (quote.get("name", "") if quote else "")
             _label = f"{name}({symbol})" if name else symbol
+
+            # Pre-flight: 보유수량 검증
+            held = holding_qty_map.get(symbol, 0)
+            already_sold = sold_qty_map.get(symbol, 0)
+            available_qty = held - already_sold
+            if available_qty <= 0:
+                logger.info(
+                    f"[Night:SellExecutor] {_label} 보유수량 없음 (보유 {held}, 기매도 {already_sold}), skip"
+                )
+                all_chunk_results.append({
+                    "symbol": symbol,
+                    "status": "SKIPPED",
+                    "reason": f"No available shares: held {held}, already queued {already_sold}",
+                    "quantity": quantity,
+                })
+                continue
+            if quantity > available_qty:
+                logger.info(
+                    f"[Night:SellExecutor] {_label} 매도수량 조정: "
+                    f"{quantity} → {available_qty}주 (보유 {held}, 기매도 {already_sold})"
+                )
+                quantity = available_qty
 
             # Extreme drop: force market sell
             if quote and quote.get("change_rate", 0) <= -15.0:
@@ -227,6 +274,10 @@ class NightSellExecutorAgent(NightBaseAgent):
                     symbol, excd, quantity, price, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
+                # 성공한 매도 수량 누적 (동일 종목 중복 매도 방지)
+                for c in chunks:
+                    if c.get("status") in ("FILLED", "SUBMITTED"):
+                        sold_qty_map[symbol] = sold_qty_map.get(symbol, 0) + c.get("quantity", 0)
                 logger.info(f"[Night:SellExecutor] {_label} smart sell done: {len(chunks)} chunks")
             except Exception as e:
                 logger.error(f"[Night:SellExecutor] {_label} smart sell failed: {e}")

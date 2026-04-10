@@ -378,20 +378,41 @@ class NightPerformanceEvaluator:
     async def _ai_feedback(
         self, agent_name: str, metrics: dict, decision_details: str = "",
     ) -> dict:
+        from kitty_night.feedback.store import load_entries
+
         detail_section = ""
         if decision_details:
             detail_section = f"\n[Decision Details — O correct, X wrong]\n{decision_details}\n"
+
+        # 과거 피드백 요약 제공 → AI가 반복되는 문제를 인식하고 누적 개선안 작성
+        past_entries = load_entries(agent_name)
+        past_section = ""
+        if past_entries:
+            past_improvements = [e.get("improvement", "") for e in past_entries[-5:] if e.get("improvement")]
+            past_goods = [e.get("good_pattern", "") for e in past_entries[-5:] if e.get("good_pattern")]
+            past_section = "\n[Past Feedback History — identify recurring patterns]\n"
+            if past_improvements:
+                past_section += "Recent improvements suggested:\n" + "\n".join(f"  - {p}" for p in past_improvements) + "\n"
+            if past_goods:
+                past_section += "Recent good patterns:\n" + "\n".join(f"  - {p}" for p in past_goods) + "\n"
+            past_section += (
+                "\nIMPORTANT: If today's issues overlap with past improvements, "
+                "write a CUMULATIVE improvement that synthesizes the recurring theme. "
+                "If a past good_pattern held true today, reinforce it with today's evidence.\n"
+            )
 
         prompt = (
             f"Below is today's performance data for the '{agent_name}' agent.\n"
             f"Scores are on 0-100 scale.\n\n"
             f"[Performance Metrics]\n{json.dumps(metrics, ensure_ascii=False, indent=2)}\n"
-            f"{detail_section}\n"
+            f"{detail_section}{past_section}\n"
             "Analyze the data and respond ONLY in this JSON format:\n"
             "{\n"
-            '  "summary": "Today\'s performance summary — score, key metrics, strengths, weaknesses (under 100 chars)",\n'
-            '  "improvement": "Specific actionable improvement for next session — what to change and why (under 200 chars)",\n'
-            '  "good_pattern": "Good decision patterns to maintain (under 80 chars, empty string if none)"\n'
+            '  "summary": "Today\'s performance: score + key result + what worked/failed (under 120 chars)",\n'
+            '  "improvement": "Specific, actionable fix for the MOST IMPORTANT issue. '
+            'If recurring from past sessions, say so and escalate urgency. (under 250 chars)",\n'
+            '  "good_pattern": "Pattern that worked today AND should be repeated. '
+            'If it confirms a past good pattern, note the consistency. (under 100 chars, empty string if none)"\n'
             "}"
         )
         try:

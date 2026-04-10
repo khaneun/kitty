@@ -8,18 +8,39 @@ from kitty_night.utils import logger
 
 from .base import NightBaseAgent
 
-SYSTEM_PROMPT = """You are a US stock buy execution specialist.
+SYSTEM_PROMPT = """You are the Buy Execution Specialist for a US stock automated trading system.
 
-Role:
-- Execute buy orders from the Asset Manager
-- Analyze order book to determine optimal buy timing and price
-- Decide whether split buying is needed
-- Report execution results
+━━━ MISSION ━━━
+Execute buy orders with optimal price and minimal market impact.
+You do NOT decide what to buy — the Asset Manager already decided that.
+Your job is to execute efficiently and report results accurately.
 
-Principles:
-- Do not buy stocks that are halted or circuit-breaker triggered
-- Skip stocks with volume < 50% of average
-- Approach stocks up > +10% intraday with caution
+━━━ EXECUTION STRATEGY ━━━
+
+Limit Order First (default):
+  1. Place limit order at current market price
+  2. Wait 10 seconds for fill
+  3. If filled → report FILLED with actual price
+  4. If not filled → cancel, wait 3s, retry as market order
+
+Market Order Fallback:
+  - Used when limit order times out
+  - Used when price = 0 (no reference price available)
+  - Max 3 attempts per chunk
+
+Split Execution (for quantity > 10):
+  - Divide into 2-3 equal chunks
+  - Execute each chunk independently
+  - Reduces market impact on larger orders
+
+━━━ PRE-FLIGHT CHECKS (handled by code, not AI) ━━━
+- Circuit breaker proximity: skip if stock up ≥ 15%
+- Cash validation: skip if insufficient funds
+- Quantity adjustment: reduce quantity if cash only covers partial order
+
+━━━ REPORTING ━━━
+Each execution result includes: symbol, order_id, status, quantity, price, chunk number.
+Status values: FILLED (confirmed), SUBMITTED (sent), SKIPPED (pre-flight fail), FAILED (error).
 """
 
 
@@ -155,6 +176,14 @@ class NightBuyExecutorAgent(NightBaseAgent):
         all_chunk_results: list[dict[str, Any]] = []
         quote_map = {q["symbol"]: q for q in context.get("quotes", [])}
 
+        # 매수 전 실제 주문 가능 금액 조회
+        try:
+            remaining_cash = await self.broker.get_available_usd()
+            logger.info(f"[Night:BuyExecutor] available cash before buys: ${remaining_cash:,.2f}")
+        except Exception as e:
+            logger.warning(f"[Night:BuyExecutor] available cash query failed, using context: {e}")
+            remaining_cash = float(context.get("available_cash_usd", 0))
+
         for order in buy_orders:
             symbol = order["symbol"]
             excd = order.get("excd", "NAS")
@@ -178,6 +207,36 @@ class NightBuyExecutorAgent(NightBaseAgent):
                 })
                 continue
 
+            # Pre-flight: 주문 가능 금액 검증
+            est_price = price
+            if est_price == 0 and quote:
+                est_price = float(quote.get("current_price", 0))
+            est_cost = est_price * quantity * 1.01 if est_price > 0 else 0  # 1% 여유분 포함
+            if est_cost > 0 and remaining_cash < est_cost:
+                # 가능한 만큼만 수량 조정
+                if est_price > 0:
+                    affordable_qty = int(remaining_cash / (est_price * 1.01))
+                else:
+                    affordable_qty = 0
+                if affordable_qty <= 0:
+                    logger.info(
+                        f"[Night:BuyExecutor] {_label} 잔고 부족 — "
+                        f"필요 ${est_cost:,.2f} > 가용 ${remaining_cash:,.2f}, skip"
+                    )
+                    all_chunk_results.append({
+                        "symbol": symbol,
+                        "status": "SKIPPED",
+                        "reason": f"Insufficient cash: need ${est_cost:,.2f}, available ${remaining_cash:,.2f}",
+                        "quantity": quantity,
+                    })
+                    continue
+                logger.info(
+                    f"[Night:BuyExecutor] {_label} 잔고에 맞게 수량 조정: "
+                    f"{quantity} → {affordable_qty}주 (가용 ${remaining_cash:,.2f})"
+                )
+                quantity = affordable_qty
+                est_cost = est_price * quantity * 1.01
+
             effective_order_type = "SPLIT" if (quantity > 10 or order_type == "SPLIT") else "SINGLE"
 
             try:
@@ -185,7 +244,16 @@ class NightBuyExecutorAgent(NightBaseAgent):
                     symbol, excd, quantity, price, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
-                logger.info(f"[Night:BuyExecutor] {_label} smart buy done: {len(chunks)} chunks")
+                # 성공한 주문 금액만큼 잔고 차감
+                for c in chunks:
+                    if c.get("status") in ("FILLED", "SUBMITTED"):
+                        c_price = c.get("price", 0) or est_price
+                        remaining_cash -= c_price * c.get("quantity", 0)
+                        remaining_cash = max(0, remaining_cash)
+                logger.info(
+                    f"[Night:BuyExecutor] {_label} smart buy done: {len(chunks)} chunks "
+                    f"(remaining cash ≈ ${remaining_cash:,.2f})"
+                )
             except Exception as e:
                 logger.error(f"[Night:BuyExecutor] {_label} smart buy failed: {e}")
                 all_chunk_results.append({

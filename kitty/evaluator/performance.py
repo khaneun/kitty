@@ -388,21 +388,42 @@ class PerformanceEvaluator:
     async def _ai_feedback(
         self, agent_name: str, metrics: dict, decision_details: str = "",
     ) -> dict:
-        """성과 지표 + 구체적 판단 내역 → 자연어 피드백"""
+        """성과 지표 + 구체적 판단 내역 + 과거 피드백 컨텍스트 → 누적 자연어 피드백"""
+        from kitty.feedback.store import load_entries
+
         detail_section = ""
         if decision_details:
             detail_section = f"\n[구체적 판단 내역 — ✓ 정확, ✗ 오판]\n{decision_details}\n"
+
+        # 과거 피드백 요약 제공 → AI가 반복되는 문제를 인식하고 누적 개선안 작성
+        past_entries = load_entries(agent_name)
+        past_section = ""
+        if past_entries:
+            past_improvements = [e.get("improvement", "") for e in past_entries[-5:] if e.get("improvement")]
+            past_goods = [e.get("good_pattern", "") for e in past_entries[-5:] if e.get("good_pattern")]
+            past_section = "\n[과거 피드백 이력 — 반복 패턴을 파악하세요]\n"
+            if past_improvements:
+                past_section += "최근 개선 제안:\n" + "\n".join(f"  - {p}" for p in past_improvements) + "\n"
+            if past_goods:
+                past_section += "최근 좋은 패턴:\n" + "\n".join(f"  - {p}" for p in past_goods) + "\n"
+            past_section += (
+                "\n중요: 오늘 이슈가 과거 개선 제안과 겹치면, "
+                "반복 테마를 종합한 누적 개선안을 작성하세요. "
+                "과거 좋은 패턴이 오늘도 유지됐다면, 오늘의 근거와 함께 강화하세요.\n"
+            )
 
         prompt = (
             f"다음은 '{agent_name}' 에이전트의 최근 사이클 성과 데이터입니다.\n"
             f"점수는 0~100점 척도입니다.\n\n"
             f"[성과 지표]\n{json.dumps(metrics, ensure_ascii=False, indent=2)}\n"
-            f"{detail_section}\n"
+            f"{detail_section}{past_section}\n"
             "위 데이터를 분석하여 아래 JSON 형식으로만 응답하세요:\n"
             "{\n"
-            '  "summary": "성과 요약 — 점수·핵심 수치·잘한 점·못한 점 포함 (100자 이내)",\n'
-            '  "improvement": "다음 사이클에 개선할 구체적 행동 지침 — 무엇을 어떻게 바꿀지, 오판의 원인과 대안을 명시 (200자 이내)",\n'
-            '  "good_pattern": "잘한 판단이 있다면 유지할 패턴 (80자 이내, 없으면 빈 문자열)"\n'
+            '  "summary": "오늘 성과: 점수 + 핵심 결과 + 잘한 점/못한 점 (120자 이내)",\n'
+            '  "improvement": "가장 중요한 이슈의 구체적 개선안. '
+            '과거와 반복되는 이슈면 반복임을 명시하고 긴급도를 높이세요. (250자 이내)",\n'
+            '  "good_pattern": "오늘 효과가 입증된 패턴. '
+            '과거 좋은 패턴과 일치하면 일관성을 언급하세요. (100자 이내, 없으면 빈 문자열)"\n'
             "}"
         )
         try:
