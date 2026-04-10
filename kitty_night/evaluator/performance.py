@@ -7,6 +7,7 @@ Evaluation flow:
   4. Generate natural language feedback via AI
   5. Save to night-feedback/*.json (NightBaseAgent injects into system_prompt next cycle)
 """
+import asyncio
 import json
 import re
 from typing import Any
@@ -86,7 +87,12 @@ class NightPerformanceEvaluator:
 
     async def _fetch_prices(self, symbols: set[str]) -> dict[str, dict]:
         eod: dict[str, dict] = {}
-        for sym in symbols:
+        sym_list = sorted(symbols)  # 순서 결정적으로 고정
+        for i, sym in enumerate(sym_list):
+            # 10개마다 2초 추가 대기 — 대량 조회 시 KIS 레이트리밋 방지
+            if i > 0 and i % 10 == 0:
+                logger.debug(f"[Night:Eval] 시세 batch pause ({i}/{len(sym_list)})")
+                await asyncio.sleep(2.0)
             try:
                 q = await self._broker.get_quote(sym)
                 eod[sym] = {

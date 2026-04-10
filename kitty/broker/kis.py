@@ -42,8 +42,8 @@ class OrderResult(BaseModel):
 class KISBroker:
     """한국투자증권 Open API 래퍼"""
 
-    # quote 간격: 0.25s → 초당 최대 4건 (KIS 권장 상한 이하)
-    _QUOTE_INTERVAL = 0.25
+    # quote 간격: 0.4s → 초당 최대 2.5건 (연속 조회 오류 방지)
+    _QUOTE_INTERVAL = 0.4
     # 주문 간격: 연속 주문 1.2s
     _ORDER_INTERVAL = 1.2
 
@@ -121,37 +121,54 @@ class KISBroker:
         self,
         make_request,
         label: str,
-        retries: int = 4,
+        retries: int = 5,
     ) -> httpx.Response:
-        """HTTP 재시도 래퍼 — 429/500에 지수 백오프+jitter 적용.
+        """HTTP 재시도 래퍼.
 
         make_request: async callable() → httpx.Response
-        다른 4xx/5xx는 즉시 raise.
+        - 429 레이트리밋: 30~40s 고정 대기 후 재시도
+        - 500/503 서버 오류: 지수 백오프 (2s → 4s → 8s)
+        - 네트워크 오류: 지수 백오프
+        - 다른 4xx/5xx: 즉시 raise
         """
         last_exc: Exception = RuntimeError(f"KIS API 재시도 초과: {label}")
         for attempt in range(retries):
-            if attempt > 0:
-                base = min(attempt * 2.0, 8.0)
-                wait = base + random.uniform(0.0, 1.0)
-                logger.warning(f"[KIS] {label} 재시도 {attempt}/{retries - 1} ({wait:.1f}s 대기)")
-                await asyncio.sleep(wait)
             try:
                 resp = await make_request()
-                if resp.status_code in (429, 500):
-                    last_exc = httpx.HTTPStatusError(
-                        f"HTTP {resp.status_code}",
-                        request=resp.request,
-                        response=resp,
+                if resp.status_code == 429:
+                    wait = 30.0 + random.uniform(0.0, 10.0)
+                    logger.warning(
+                        f"[KIS] {label} 레이트리밋(429) — {wait:.0f}s 대기 후 재시도 "
+                        f"({attempt + 1}/{retries})"
                     )
-                    logger.warning(f"[KIS] {label} HTTP {resp.status_code} (attempt {attempt + 1}/{retries})")
+                    await asyncio.sleep(wait)
+                    last_exc = httpx.HTTPStatusError(
+                        f"HTTP 429", request=resp.request, response=resp,
+                    )
+                    continue
+                if resp.status_code in (500, 503):
+                    wait = min((attempt + 1) * 2.0, 8.0) + random.uniform(0.0, 1.0)
+                    logger.warning(
+                        f"[KIS] {label} 서버오류({resp.status_code}) — "
+                        f"{wait:.1f}s 대기 ({attempt + 1}/{retries})"
+                    )
+                    await asyncio.sleep(wait)
+                    last_exc = httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}", request=resp.request, response=resp,
+                    )
                     continue
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError:
                 raise
             except Exception as e:
+                wait = min((attempt + 1) * 2.0, 8.0) + random.uniform(0.0, 1.0)
                 last_exc = e
-                logger.warning(f"[KIS] {label} 네트워크 오류 (attempt {attempt + 1}/{retries}): {e}")
+                logger.warning(
+                    f"[KIS] {label} 네트워크 오류 ({attempt + 1}/{retries}) "
+                    f"{wait:.1f}s 대기: {e}"
+                )
+                await asyncio.sleep(wait)
         raise last_exc
 
     async def get_quote(self, symbol: str) -> StockQuote:

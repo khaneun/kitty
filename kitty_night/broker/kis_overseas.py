@@ -107,8 +107,8 @@ class KISOverseasBroker:
 
     # 연속 주문 제한: 1.2초 간격 (규정 1초 + 0.2초 여유)
     _ORDER_INTERVAL = 1.2
-    # 시세 조회 간격: 0.6초 (KIS 해외 API 과부하 방지, 초당 ~1.6건)
-    _QUOTE_INTERVAL = 0.6
+    # 시세 조회 간격: 1.0초 (KIS 해외 API — 분당 ~55건으로 보수적 유지)
+    _QUOTE_INTERVAL = 1.0
 
     def __init__(self) -> None:
         self._access_token: str | None = None
@@ -174,37 +174,54 @@ class KISOverseasBroker:
         self,
         make_request,
         label: str,
-        retries: int = 4,
+        retries: int = 5,
     ) -> httpx.Response:
-        """HTTP 재시도 래퍼 — 429/500에 지수 백오프+jitter 적용.
+        """HTTP 재시도 래퍼.
 
         make_request: async callable() → httpx.Response
-        다른 4xx/5xx는 즉시 raise.
+        - 429 레이트리밋: 30~40s 고정 대기 후 재시도
+        - 500/503 서버 오류: 지수 백오프 (2s → 4s → 8s)
+        - 네트워크 오류: 지수 백오프
+        - 다른 4xx/5xx: 즉시 raise
         """
         last_exc: Exception = RuntimeError(f"[Night:KIS] API 재시도 초과: {label}")
         for attempt in range(retries):
-            if attempt > 0:
-                base = min(attempt * 2.0, 8.0)
-                wait = base + random.uniform(0.0, 1.0)
-                logger.warning(f"[Night:KIS] {label} 재시도 {attempt}/{retries - 1} ({wait:.1f}s 대기)")
-                await asyncio.sleep(wait)
             try:
                 resp = await make_request()
-                if resp.status_code in (429, 500):
-                    last_exc = httpx.HTTPStatusError(
-                        f"HTTP {resp.status_code}",
-                        request=resp.request,
-                        response=resp,
+                if resp.status_code == 429:
+                    wait = 30.0 + random.uniform(0.0, 10.0)
+                    logger.warning(
+                        f"[Night:KIS] {label} 레이트리밋(429) — {wait:.0f}s 대기 후 재시도 "
+                        f"({attempt + 1}/{retries})"
                     )
-                    logger.warning(f"[Night:KIS] {label} HTTP {resp.status_code} (attempt {attempt + 1}/{retries})")
+                    await asyncio.sleep(wait)
+                    last_exc = httpx.HTTPStatusError(
+                        f"HTTP 429", request=resp.request, response=resp,
+                    )
+                    continue
+                if resp.status_code in (500, 503):
+                    wait = min((attempt + 1) * 2.0, 8.0) + random.uniform(0.0, 1.0)
+                    logger.warning(
+                        f"[Night:KIS] {label} 서버오류({resp.status_code}) — "
+                        f"{wait:.1f}s 대기 ({attempt + 1}/{retries})"
+                    )
+                    await asyncio.sleep(wait)
+                    last_exc = httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}", request=resp.request, response=resp,
+                    )
                     continue
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError:
                 raise
             except Exception as e:
+                wait = min((attempt + 1) * 2.0, 8.0) + random.uniform(0.0, 1.0)
                 last_exc = e
-                logger.warning(f"[Night:KIS] {label} 네트워크 오류 (attempt {attempt + 1}/{retries}): {e}")
+                logger.warning(
+                    f"[Night:KIS] {label} 네트워크 오류 ({attempt + 1}/{retries}) "
+                    f"{wait:.1f}s 대기: {e}"
+                )
+                await asyncio.sleep(wait)
         raise last_exc
 
     # ── Throttle ─────────────────────────────────────────────────────────────
@@ -359,16 +376,29 @@ class KISOverseasBroker:
     # ── 매수 ─────────────────────────────────────────────────────────────────
 
     async def _paper_aggressive_price(self, symbol: str, excd: str, side: str) -> float:
-        """모의투자용 공격적 지정가 산출 — 현재가 기준 BUY +0.5%, SELL -0.5%"""
-        try:
-            quote = await self.get_quote(symbol, excd)
-            if side == "BUY":
-                return round(quote.current_price * 1.005, 2)
-            else:
-                return round(quote.current_price * 0.995, 2)
-        except Exception as e:
-            logger.warning(f"[Night:KIS] 모의투자 지정가 산출 실패 ({symbol}): {e}")
-            return 0.0
+        """모의투자용 공격적 지정가 산출 — 현재가 기준 BUY +0.5%, SELL -0.5%
+        시세 조회 실패 시 최대 2회 재시도 (지수 백오프).
+        """
+        for attempt in range(3):
+            try:
+                quote = await self.get_quote(symbol, excd)
+                if side == "BUY":
+                    return round(quote.current_price * 1.005, 2)
+                else:
+                    return round(quote.current_price * 0.995, 2)
+            except Exception as e:
+                if attempt < 2:
+                    wait = (attempt + 1) * 3.0
+                    logger.warning(
+                        f"[Night:KIS] 모의투자 지정가 산출 실패 ({symbol}) "
+                        f"— {wait:.0f}s 후 재시도 ({attempt + 1}/3): {e}"
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.warning(
+                        f"[Night:KIS] 모의투자 지정가 산출 최종 실패 ({symbol}): {e}"
+                    )
+        return 0.0
 
     async def buy(
         self, symbol: str, excd: str, quantity: int,
