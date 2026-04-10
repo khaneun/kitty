@@ -1096,12 +1096,21 @@ header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;displ
 .s-bar-n{font-size:9px;color:#8b949e;width:14px;flex-shrink:0;text-align:right}
 /* 포트폴리오 테이블 */
 .pf-wrap{overflow-x:auto;border:1px solid #30363d;border-radius:8px;margin-bottom:14px}
-table.pf{width:100%;border-collapse:collapse;font-size:12px;min-width:420px}
+table.pf{width:100%;border-collapse:collapse;font-size:12px;min-width:320px}
 table.pf th{background:#161b22;padding:7px 10px;text-align:right;color:#8b949e;font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600;border-bottom:1px solid #30363d}
 table.pf th:first-child{text-align:left}
 table.pf td{padding:7px 10px;border-bottom:1px solid #161b22;text-align:right;vertical-align:middle}
 table.pf td:first-child{text-align:left}
 table.pf tr:last-child td{border-bottom:none}
+.pf-rate-cell{cursor:pointer;user-select:none}
+.pf-rate-cell:hover{text-decoration:underline dotted;opacity:.85}
+.pf-popup{position:fixed;z-index:400;background:#1c2128;border:1px solid #30363d;border-radius:8px;padding:12px 14px;min-width:210px;box-shadow:0 8px 24px rgba(0,0,0,.65);font-size:12px;display:none}
+.pf-popup-title{font-size:13px;font-weight:700;color:#f0f6fc;margin-bottom:9px;padding-bottom:6px;border-bottom:1px solid #30363d}
+.pf-popup-sym{color:#8b949e;font-size:11px;font-weight:400;margin-left:5px}
+.pf-popup-row{display:flex;justify-content:space-between;gap:20px;padding:4px 0;border-bottom:1px solid #21262d}
+.pf-popup-row:last-child{border-bottom:none}
+.pf-popup-lbl{color:#8b949e}
+.pf-popup-val{color:#c9d1d9;font-weight:600}
 table.pf tr:hover td{background:#161b22}
 .pf-name{font-weight:600;color:#f0f6fc;font-size:12px}
 .pf-sym{font-size:10px;color:#8b949e}
@@ -1346,9 +1355,9 @@ body{padding-bottom:80px}
     <div class="pf-wrap">
       <table class="pf">
         <thead><tr>
-          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률</th><th>손익금액</th><th>평가금액</th>
+          <th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>수익률 ⓘ</th>
         </tr></thead>
-        <tbody id="pf-tbody"><tr><td colspan="7" class="empty">로딩 중...</td></tr></tbody>
+        <tbody id="pf-tbody"><tr><td colspan="5" class="empty">로딩 중...</td></tr></tbody>
       </table>
     </div>
     <div style="font-size:10px;color:#484f58;margin-top:6px;text-align:right" id="pf-ts"></div>
@@ -1391,8 +1400,8 @@ body{padding-bottom:80px}
     </div>
     <div class="pf-wrap">
       <table class="pf">
-        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Price</th><th>P&L%</th><th>Value</th></tr></thead>
-        <tbody id="nt-pf-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Price</th><th>P&L% ⓘ</th></tr></thead>
+        <tbody id="nt-pf-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
       </table>
     </div>
     <div style="font-size:10px;color:#484f58;margin-top:6px;text-align:right" id="nt-pf-ts"></div>
@@ -1580,6 +1589,7 @@ body{padding-bottom:80px}
 </div>
 
 <!-- 모달 -->
+<div id="pf-popup" class="pf-popup" onclick="event.stopPropagation()"></div>
 <div class="modal-bg" id="modal" onclick="closeModal(event)">
   <div class="modal">
     <button class="close-btn" onclick="document.getElementById('modal').classList.remove('show')">✕</button>
@@ -1884,23 +1894,20 @@ async function loadPortfolio() {
 
     const tbody = document.getElementById('pf-tbody');
     if(!d.holdings || !d.holdings.length){
-      tbody.innerHTML='<tr><td colspan="7" class="empty">보유 종목 없음</td></tr>';
+      tbody.innerHTML='<tr><td colspan="5" class="empty">보유 종목 없음</td></tr>';
       return;
     }
+    _pfDataMap = {};
+    d.holdings.forEach(h=>{ _pfDataMap[h.symbol] = h; });
     tbody.innerHTML = d.holdings.map(h=>{
       const color = pnlColor(h.pnl_rt);
       const arrow = h.pnl_rt>=0?'▲':'▼';
-      // pnl_amt: KIS 직접 제공값 우선, 없으면 eval_amt - avg*qty 계산
-      const pnlAmt = h.pnl_amt != null ? h.pnl_amt : (h.eval_amt - h.avg * h.qty);
-      const pnlAmtStr = (pnlAmt>=0?'+':'')+pnlAmt.toLocaleString()+'원';
       return `<tr>
         <td><div class="pf-name">${esc(h.name)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
         <td>${h.qty.toLocaleString()}</td>
         <td>${h.avg.toLocaleString()}</td>
         <td>${h.current.toLocaleString()}</td>
-        <td style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
-        <td style="color:${color};font-weight:600">${pnlAmtStr}</td>
-        <td>${h.eval_amt.toLocaleString()}원</td>
+        <td class="pf-rate-cell" style="color:${color};font-weight:700" onclick="showPfPopup(event,'${h.symbol}',false)">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
       </tr>`;
     }).join('');
   } catch(e){ console.error('portfolio',e); }
@@ -2058,6 +2065,61 @@ async function onPromptClick(event, agentName, isNight) {
   document.getElementById('modal').classList.add('show');
 }
 function closeModal(e){ if(e.target.id==='modal') document.getElementById('modal').classList.remove('show'); }
+
+// ── 포트폴리오 수익률 팝업 ─────────────────────────────────
+let _pfDataMap = {};
+let _ntPfDataMap = {};
+
+function showPfPopup(event, symbol, isNight) {
+  event.stopPropagation();
+  const h = isNight ? _ntPfDataMap[symbol] : _pfDataMap[symbol];
+  if (!h) return;
+  const popup = document.getElementById('pf-popup');
+
+  if (!isNight) {
+    const color = pnlColor(h.pnl_rt);
+    const arrow = h.pnl_rt >= 0 ? '▲' : '▼';
+    const pnlAmt = h.pnl_amt != null ? h.pnl_amt : (h.eval_amt - h.avg * h.qty);
+    const pnlSign = pnlAmt >= 0 ? '+' : '';
+    popup.innerHTML = `
+      <div class="pf-popup-title">${esc(h.name)}<span class="pf-popup-sym">${esc(h.symbol)}</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">수량</span><span class="pf-popup-val">${h.qty.toLocaleString()}주</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">평균단가</span><span class="pf-popup-val">${h.avg.toLocaleString()}원</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">현재가</span><span class="pf-popup-val">${h.current.toLocaleString()}원</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">수익률</span><span class="pf-popup-val" style="color:${color}">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">손익금액</span><span class="pf-popup-val" style="color:${color}">${pnlSign}${pnlAmt.toLocaleString()}원</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">평가금액</span><span class="pf-popup-val">${h.eval_amt.toLocaleString()}원</span></div>`;
+  } else {
+    const rate = h.pnl_rate || h.pnl_rt || 0;
+    const color = pnlColor(rate);
+    const arrow = rate >= 0 ? '▲' : '▼';
+    const pnlAmt = h.pnl_amount || 0;
+    const pnlSign = pnlAmt >= 0 ? '+' : '';
+    popup.innerHTML = `
+      <div class="pf-popup-title">${esc(h.name||h.symbol)}<span class="pf-popup-sym">${esc(h.symbol)}</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">Qty</span><span class="pf-popup-val">${(h.quantity||h.qty||0).toLocaleString()} shares</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">Avg Price</span><span class="pf-popup-val">${fmtUSD(h.avg_price||h.avg||0)}</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">Current</span><span class="pf-popup-val">${fmtUSD(h.current_price||h.current||0)}</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">P&L%</span><span class="pf-popup-val" style="color:${color}">${arrow}${Math.abs(rate).toFixed(2)}%</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">P&L $</span><span class="pf-popup-val" style="color:${color}">${pnlSign}${fmtUSD(Math.abs(pnlAmt))}</span></div>
+      <div class="pf-popup-row"><span class="pf-popup-lbl">Value</span><span class="pf-popup-val">${fmtUSD(h.eval_amount||h.eval_amt||0)}</span></div>`;
+  }
+
+  popup.style.display = 'block';
+  const rect = event.target.getBoundingClientRect();
+  let top = rect.bottom + 6;
+  let left = rect.left;
+  const pw = popup.offsetWidth || 220;
+  const ph = popup.offsetHeight || 210;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (top + ph > window.innerHeight - 8) top = rect.top - ph - 6;
+  popup.style.top = top + 'px';
+  popup.style.left = left + 'px';
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('pf-popup').style.display = 'none';
+});
 
 // ── 채팅 탭 ─────────────────────────────────────────────
 let _chatPollTimer = null;
@@ -2334,9 +2396,11 @@ async function loadNightPortfolio() {
 
     const tbody = document.getElementById('nt-pf-tbody');
     if(!d.holdings || !d.holdings.length){
-      tbody.innerHTML='<tr><td colspan="6" class="empty">No holdings</td></tr>';
+      tbody.innerHTML='<tr><td colspan="5" class="empty">No holdings</td></tr>';
       return;
     }
+    _ntPfDataMap = {};
+    d.holdings.forEach(h=>{ _ntPfDataMap[h.symbol] = h; });
     tbody.innerHTML = d.holdings.map(h=>{
       const color = pnlColor(h.pnl_rate||h.pnl_rt||0);
       const rate = h.pnl_rate||h.pnl_rt||0;
@@ -2346,8 +2410,7 @@ async function loadNightPortfolio() {
         <td>${(h.quantity||h.qty||0).toLocaleString()}</td>
         <td>${fmtUSD(h.avg_price||h.avg||0)}</td>
         <td>${fmtUSD(h.current_price||h.current||0)}</td>
-        <td style="color:${color};font-weight:700">${arrow}${Math.abs(rate).toFixed(2)}%</td>
-        <td style="color:${color}">${fmtUSD(h.eval_amount||h.eval_amt||0)}</td>
+        <td class="pf-rate-cell" style="color:${color};font-weight:700" onclick="showPfPopup(event,'${h.symbol}',true)">${arrow}${Math.abs(rate).toFixed(2)}%</td>
       </tr>`;
     }).join('');
   } catch(e){ console.error('night-portfolio',e); }
