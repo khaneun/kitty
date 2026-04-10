@@ -440,18 +440,18 @@ class KISOverseasBroker:
         self, symbol: str, excd: str, quantity: int,
         price: float = 0.0, name: str = "",
     ) -> OverseasOrderResult:
-        """해외주식 매수 주문. price=0이면 시장가(01), 아니면 지정가(00).
-        모의투자는 시장가 미지원 → 현재가 +0.5% 공격적 지정가로 자동 변환.
+        """해외주식 매수 주문. price=0이면 공격적 지정가(현재가 +0.5%)로 자동 변환.
+        미국주식 실전 매수(TTTT1002U)는 ORD_DVSN "01"(시장가) 미지원 — 지정가만 허용.
         연속 주문 제한 1.2초 간격 보장.
         """
-        # 모의투자는 시장가 주문 미지원 → 공격적 지정가로 대체
-        if price == 0.0 and self._mode == "paper":
+        # 실전/모의 모두 price=0이면 공격적 지정가로 변환 (미국 매수는 시장가 코드 없음)
+        if price == 0.0:
             price = await self._paper_aggressive_price(symbol, excd, "BUY")
-            logger.info(f"[Night:KIS] 모의투자 매수 시장가→지정가 대체: {symbol} @ ${price:.2f}")
+            logger.info(f"[Night:KIS] 매수 시장가→지정가 변환 [{self._mode}]: {symbol} @ ${price:.2f}")
 
         await self._throttle_order()
         tr_id = _BUY_TR[self._mode]
-        ord_dvsn = "00" if price > 0 else "01"
+        ord_dvsn = "00"  # 지정가 고정 (미국 매수는 00만 유효)
         _label = f"{name}({symbol})" if name else symbol
         order_excd = _to_order_excd(excd)   # NAS → NASD 등 변환
 
@@ -496,20 +496,20 @@ class KISOverseasBroker:
         price: float = 0.0, name: str = "",
     ) -> OverseasOrderResult:
         """해외주식 매도 주문.
-        모의투자는 시장가 미지원 → 현재가 -0.5% 공격적 지정가로 자동 변환.
+        실전은 MOO("31") 시장가 가능하나, 일관성을 위해 공격적 지정가(현재가 -0.5%) 사용.
         """
-        # 모의투자는 시장가 주문 미지원 → 공격적 지정가로 대체
-        if price == 0.0 and self._mode == "paper":
+        # 실전/모의 모두 price=0이면 공격적 지정가로 변환
+        if price == 0.0:
             price = await self._paper_aggressive_price(symbol, excd, "SELL")
             if price <= 0.0:
                 raise RuntimeError(
-                    f"모의투자 매도 불가 ({symbol}): 시세 조회 실패로 지정가 산출 불가"
+                    f"매도 불가 ({symbol}): 시세 조회 실패로 지정가 산출 불가"
                 )
-            logger.info(f"[Night:KIS] 모의투자 매도 시장가→지정가 대체: {symbol} @ ${price:.2f}")
+            logger.info(f"[Night:KIS] 매도 시장가→지정가 변환 [{self._mode}]: {symbol} @ ${price:.2f}")
 
         await self._throttle_order()
         tr_id = _SELL_TR[self._mode]
-        ord_dvsn = "00" if price > 0 else "01"
+        ord_dvsn = "00"  # 지정가 고정
         _label = f"{name}({symbol})" if name else symbol
         order_excd = _to_order_excd(excd)   # NAS → NASD 등 변환
 
