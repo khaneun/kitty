@@ -1250,6 +1250,8 @@ body{padding-bottom:80px}
 /* 프롬프트 버튼 */
 .btn-prompt{background:transparent;border:1px solid #30363d;color:#58a6ff;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-top:6px;width:100%}
 .btn-prompt:hover{background:#1c4a7a;border-color:#58a6ff}
+.btn-detail{background:transparent;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:2px 7px;font-size:11px;cursor:pointer;white-space:nowrap}
+.btn-detail:hover{border-color:#58a6ff;color:#58a6ff}
 .cls-익절{background:#3d1010;color:#f85149}.cls-손절{background:#0d1a3d;color:#4493f8}
 .cls-신규매수{background:#0d2d3d;color:#58a6ff}.cls-추가매수{background:#142814;color:#57ab5a}
 .cls-종목교체{background:#2d2500;color:#d29922}.cls-매도{background:#21262d;color:#8b949e}
@@ -1543,8 +1545,8 @@ body{padding-bottom:80px}
   </div>
   <div class="meta" id="tr-meta"></div>
   <div class="tbl-wrap">
-    <table class="log" style="min-width:580px">
-      <thead><tr><th>날짜/시각</th><th>종목</th><th>분류</th><th>수량</th><th>가격</th><th>수익률</th><th>사유 (클릭=전체)</th></tr></thead>
+    <table class="log" style="min-width:400px">
+      <thead><tr><th>날짜/시각</th><th>종목</th><th>분류</th><th>수익률</th><th>상세</th></tr></thead>
       <tbody id="tr-tbody"></tbody>
     </table>
   </div>
@@ -1594,7 +1596,7 @@ body{padding-bottom:80px}
   <div class="modal">
     <button class="close-btn" onclick="document.getElementById('modal').classList.remove('show')">✕</button>
     <h3 id="modal-title"></h3>
-    <pre id="modal-body"></pre>
+    <div id="modal-body" style="font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-all;line-height:1.6"></div>
   </div>
 </div>
 
@@ -2051,6 +2053,34 @@ function showAgentModal(agent, date, score, summary, improvement) {
   document.getElementById('modal').classList.add('show');
 }
 
+// ── 매매일지 상세 팝업 ────────────────────────────────────
+let _trSliceData = [];
+
+function showTradeDetail(i) {
+  const t = _trSliceData[i];
+  if (!t) return;
+  const isNight = t.source === 'night';
+  const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(2)+'%' : '-';
+  const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';
+  const priceStr = t.price
+    ? (isNight ? '$'+Number(t.price).toFixed(2) : Number(t.price).toLocaleString()+'원')
+    : '시장가';
+  const srcLabel = isNight ? '🌙 Night (해외)' : '🐱 Kitty (국내)';
+
+  document.getElementById('modal-title').textContent =
+    `${t.name||t.symbol} (${t.symbol}) — ${t.date} ${t.time}`;
+  document.getElementById('modal-body').innerHTML =
+    `<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">` +
+    `<tr><td style="color:#8b949e;padding:5px 0;width:80px">구분</td><td style="color:#c9d1d9">${srcLabel} / ${t.classify}</td></tr>` +
+    `<tr><td style="color:#8b949e;padding:5px 0">수량</td><td style="color:#c9d1d9">${(t.quantity||0).toLocaleString()}${isNight?' shares':'주'}</td></tr>` +
+    `<tr><td style="color:#8b949e;padding:5px 0">가격</td><td style="color:#c9d1d9">${priceStr}</td></tr>` +
+    `<tr><td style="color:#8b949e;padding:5px 0">수익률</td><td style="color:${pnlColor};font-weight:700">${pnlTxt}</td></tr>` +
+    `</table>` +
+    `<div style="color:#8b949e;font-size:11px;margin-bottom:6px">사유</div>` +
+    `<div style="color:#c9d1d9;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all">${esc(t.reason||'-')}</div>`;
+  document.getElementById('modal').classList.add('show');
+}
+
 let _agentPromptsCache = null;
 async function onPromptClick(event, agentName, isNight) {
   event.stopPropagation();
@@ -2275,27 +2305,23 @@ function renderTradesPage() {
 
   const tbody = document.getElementById('tr-tbody');
   if(!total) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">거래 내역 없음</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">거래 내역 없음</td></tr>';
     document.getElementById('tr-pagination').innerHTML = '';
     return;
   }
 
-  tbody.innerHTML = slice.map(t => {
+  _trSliceData = slice;
+  tbody.innerHTML = slice.map((t, i) => {
     const clsCss = 'trade-cls cls-'+t.classify;
     const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(1)+'%' : '-';
-    const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';  // 한국 기준: 상승=빨강, 하락=파랑
-    const priceStr = t.price ? Number(t.price).toLocaleString() : '-';
+    const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';
     const srcIcon = t.source==='night' ? '🌙' : '🐱';
-    const shortReason = t.reason ? (t.reason.length>50?t.reason.slice(0,50)+'…':t.reason) : '-';
-    const fullReason = JSON.stringify(t.reason||'');
     return `<tr>
       <td class="ts-col">${srcIcon} ${t.date}<br><span style="color:#484f58">${t.time}</span></td>
       <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
       <td><span class="${clsCss}">${t.classify}</span></td>
-      <td style="text-align:right">${(t.quantity||0).toLocaleString()}</td>
-      <td style="text-align:right">${priceStr}</td>
       <td style="text-align:right;color:${pnlColor};font-weight:700">${pnlTxt}</td>
-      <td class="msg-col" onclick="showModal('${esc(t.date+' '+t.time)}','${esc(t.classify)}','${esc(t.symbol)}',${fullReason})">${esc(shortReason)}</td>
+      <td style="text-align:center"><button class="btn-detail" onclick="showTradeDetail(${i})">자세히</button></td>
     </tr>`;
   }).join('');
 
