@@ -1268,10 +1268,17 @@ body{padding-bottom:80px}
 .tr-bar-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .tr-bar-cnt{font-weight:700;color:#c9d1d9;margin-left:1px}
 /* 매매일지 컬럼 너비 */
-table.log th:nth-child(1),table.log td:nth-child(1){width:62px}
-table.log th:nth-child(2),table.log td:nth-child(2){max-width:120px}
-table.log th:nth-child(3),table.log td:nth-child(3){width:64px}
-table.log th:nth-child(4),table.log td:nth-child(4){width:48px;text-align:center}
+#tr-table th:nth-child(1),#tr-table td:nth-child(1){width:62px}
+#tr-table th:nth-child(2),#tr-table td:nth-child(2){max-width:120px}
+#tr-table th:nth-child(3),#tr-table td:nth-child(3){width:64px}
+#tr-table th:nth-child(4),#tr-table td:nth-child(4){width:48px;text-align:center}
+/* 에러 로그 컬럼 너비 */
+#err-table{min-width:300px}
+#err-table th:nth-child(1),#err-table td:nth-child(1){width:58px;white-space:nowrap}
+#err-table th:nth-child(2),#err-table td:nth-child(2){width:60px}
+#err-table th:nth-child(3),#err-table td:nth-child(3){color:#79c0ff;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
+#err-table tr{cursor:pointer}
+#err-table tr:hover td{background:#1c2128}
 </style>
 </head>
 <body>
@@ -1330,7 +1337,7 @@ table.log th:nth-child(4),table.log td:nth-child(4){width:48px;text-align:center
   </div>
   <div class="meta" id="err-meta"></div>
   <div class="tbl-wrap">
-    <table class="log">
+    <table class="log" id="err-table">
       <thead><tr><th>시각</th><th>레벨</th><th>모듈</th></tr></thead>
       <tbody id="err-tbody"></tbody>
     </table>
@@ -1577,7 +1584,7 @@ table.log th:nth-child(4),table.log td:nth-child(4){width:48px;text-align:center
   </div>
   <div class="meta" id="tr-meta"></div>
   <div class="tbl-wrap">
-    <table class="log" style="min-width:400px">
+    <table class="log" id="tr-table">
       <thead><tr><th>날짜/시각</th><th>종목</th><th>분류</th><th>상세</th></tr></thead>
       <tbody id="tr-tbody"></tbody>
     </table>
@@ -1798,18 +1805,26 @@ async function loadErrors() {
     document.getElementById('err-meta').textContent=`총 ${d.total}건 중 ${Math.min(d.total,200)}건`;
     const tbody=document.getElementById('err-tbody');
     if(!d.rows.length){ tbody.innerHTML='<tr><td colspan="3" class="empty">에러 없음 ✅</td></tr>'; return; }
-    tbody.innerHTML=d.rows.map(r=>{
+    _errData = d.rows;
+    tbody.innerHTML=d.rows.map((r,i)=>{
       const mod=r.module.split(':')[0].split('.').slice(-2).join('.');
-      const full=JSON.stringify(r.message);
-      return `<tr style="cursor:pointer" onclick="showModal('${esc(r.ts)}','${esc(r.level)}','${esc(r.module)}',${full})">
+      return `<tr onclick="showErrDetail(${i})">
         <td class="ts-col">${r.ts.slice(5,16)}</td>
         <td>${badge(r.level)}</td>
-        <td class="mod-col" title="${esc(r.module)}">${esc(mod)}</td>
+        <td title="${esc(r.module)}">${esc(mod)}</td>
       </tr>`;
     }).join('');
   } catch(e){ console.error(e); }
 }
 
+let _errData = [];
+function showErrDetail(i) {
+  const r = _errData[i];
+  if (!r) return;
+  document.getElementById('modal-title').textContent = `[${r.level}] ${r.ts.slice(5,16)}`;
+  document.getElementById('modal-body').textContent  = `모듈: ${r.module}\n\n${r.message}`;
+  document.getElementById('modal').classList.add('show');
+}
 function clearFilter(){
   document.getElementById('f-date').value=_kstDate();
   document.getElementById('f-level').value='';
