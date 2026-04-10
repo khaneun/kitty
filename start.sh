@@ -152,6 +152,7 @@ docker run -d \
   -v /home/ec2-user/kitty/night-token_usage:/night-token_usage:ro \
   -v /home/ec2-user/kitty/reports:/reports:ro \
   -v /home/ec2-user/kitty/night-reports:/night-reports:ro \
+  -v /home/ec2-user/kitty/night-commands:/night-commands \
   -e TELEGRAM_BOT_TOKEN="$_TG_TOKEN" \
   -e TELEGRAM_CHAT_ID="$_TG_CHAT" \
   -e MONITOR_PASSWORD="$_MON_PW" \

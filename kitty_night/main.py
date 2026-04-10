@@ -35,6 +35,7 @@ setup_night_logger()
 
 _KST = ZoneInfo("Asia/Seoul")
 _AGENT_CONTEXT_PATH = Path("night-logs/night_agent_context.json")
+_NIGHT_FORCE_SELL_DIR = Path("night-commands")
 
 # US market barometer symbols (major ETFs + mega caps)
 _BAROMETER_SYMBOLS = [
@@ -67,6 +68,35 @@ def _save_agent_context(agent_name: str, output: dict) -> None:
         _AGENT_CONTEXT_PATH.write_text(json.dumps(ctx, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         logger.debug(f"Agent context save failed: {e}")
+
+
+async def _night_force_sell_handler(broker: KISOverseasBroker) -> None:
+    """night-commands/night_force_sell_{symbol}.json 청산 요청 처리 (2초 폴링)"""
+    while True:
+        await asyncio.sleep(2)
+        try:
+            _NIGHT_FORCE_SELL_DIR.mkdir(parents=True, exist_ok=True)
+            for req_file in sorted(_NIGHT_FORCE_SELL_DIR.glob("night_force_sell_*.json")):
+                try:
+                    req = json.loads(req_file.read_text(encoding="utf-8"))
+                    symbol = req.get("symbol", "")
+                    qty = int(req.get("qty", 0))
+                    excd = req.get("excd", "NAS")
+                    req_file.unlink(missing_ok=True)
+                    if not symbol or qty <= 0:
+                        logger.warning(f"[Night:청산요청] 잘못된 요청: {req}")
+                        continue
+                    logger.info(f"[Night:청산요청] {symbol}({excd}) {qty}주 즉시 청산 시작")
+                    try:
+                        order = await broker.sell(symbol, excd, qty, 0)
+                        logger.info(f"[Night:청산요청] {symbol} 청산 완료: {order}")
+                    except Exception as e:
+                        logger.error(f"[Night:청산요청] {symbol} 청산 실패: {e}")
+                except Exception as e:
+                    logger.warning(f"[Night:청산요청] 파일 처리 실패 {req_file.name}: {e}")
+                    req_file.unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug(f"[Night:청산요청] 핸들러 오류: {e}")
 
 
 async def _collect_market_data(broker: KISOverseasBroker) -> dict:
@@ -339,6 +369,9 @@ async def main() -> None:
     reporter = NightTelegramReporter().build()
     daily_report = NightDailyReport()
     evaluator = NightPerformanceEvaluator(broker)
+
+    # Night 청산 요청 핸들러 백그라운드 태스크
+    asyncio.create_task(_night_force_sell_handler(broker))
 
     await reporter.send(
         f"🌙 *Kitty Night Mode Started!*\n"

@@ -84,6 +84,7 @@ REPORTS_DIR       = Path(os.getenv("REPORTS_DIR",        "/reports"))
 NIGHT_REPORTS_DIR = Path(os.getenv("NIGHT_REPORTS_DIR",  "/night-reports"))
 NIGHT_PORTFOLIO_SNAPSHOT = NIGHT_LOG_DIR / "night_portfolio_snapshot.json"
 NIGHT_AGENT_CONTEXT      = NIGHT_LOG_DIR / "night_agent_context.json"
+NIGHT_CMD_DIR = Path(os.getenv("NIGHT_CMD_DIR", "/night-commands"))
 
 NIGHT_AGENTS = ["NightSectorAnalyst", "NightStockPicker", "NightStockEvaluator",
                 "NightAssetManager", "NightBuyExecutor", "NightSellExecutor"]
@@ -528,6 +529,57 @@ async def api_set_mode(req: Request):
         CMD_DIR.mkdir(parents=True, exist_ok=True)
         MODE_REQ.write_text(json.dumps({"mode": mode}), encoding="utf-8")
         return {"ok": True, "mode": mode}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/force-sell")
+async def api_force_sell(req: Request):
+    """KR 종목 즉시 청산 요청 — commands/force_sell_{symbol}.json 기록"""
+    _auth(req)
+    body = await req.json()
+    symbol = body.get("symbol", "")
+    qty = body.get("qty", 0)
+    if not symbol:
+        from fastapi import HTTPException
+        raise HTTPException(400, "symbol required")
+    try:
+        CMD_DIR.mkdir(parents=True, exist_ok=True)
+        force_file = CMD_DIR / f"force_sell_{symbol}.json"
+        force_file.write_text(
+            json.dumps({"symbol": symbol, "qty": int(qty),
+                        "ts": _now().strftime("%Y-%m-%d %H:%M:%S")},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return {"ok": True, "symbol": symbol}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/night/force-sell")
+async def api_night_force_sell(req: Request):
+    """Night 종목 즉시 청산 요청 — night-commands/night_force_sell_{symbol}.json 기록"""
+    _auth(req)
+    body = await req.json()
+    symbol = body.get("symbol", "")
+    qty = body.get("qty", 0)
+    excd = body.get("excd", "NAS")
+    if not symbol:
+        from fastapi import HTTPException
+        raise HTTPException(400, "symbol required")
+    try:
+        NIGHT_CMD_DIR.mkdir(parents=True, exist_ok=True)
+        force_file = NIGHT_CMD_DIR / f"night_force_sell_{symbol}.json"
+        force_file.write_text(
+            json.dumps({"symbol": symbol, "qty": int(qty), "excd": excd,
+                        "ts": _now().strftime("%Y-%m-%d %H:%M:%S")},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return {"ok": True, "symbol": symbol}
     except Exception as e:
         from fastapi import HTTPException
         raise HTTPException(500, str(e))
@@ -1257,9 +1309,22 @@ table.pf tr:last-child td{border-bottom:none}
 .pf-popup-row:last-child{border-bottom:none}
 .pf-popup-lbl{color:#8b949e}
 .pf-popup-val{color:#c9d1d9;font-weight:600}
-table.pf tr:hover td{background:#161b22}
+table.pf tr.pf-row:hover td{background:#161b22}
 .pf-name{font-weight:600;color:#f0f6fc;font-size:12px;max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pf-sym{font-size:10px;color:#8b949e}
+.pf-detail-row td{padding:0}
+.pf-detail-cell{background:#0d1117!important;padding:10px 12px!important;border-bottom:1px solid #30363d!important}
+.pf-detail-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12px;margin-bottom:8px}
+.pf-dl{color:#8b949e}
+.pf-dv{color:#c9d1d9;font-weight:600;text-align:right}
+.btn-force-sell{width:100%;background:#2d0a0a;border:1px solid #f85149;color:#f85149;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;transition:background .15s}
+.btn-force-sell:hover{background:#3d0d0d}
+.btn-force-sell:disabled{opacity:.5;cursor:not-allowed}
+/* 에러 2행 레이아웃 */
+table.log{min-width:320px!important}
+.err-row-top td{padding:6px 10px 2px!important;border-bottom:none!important}
+.err-row-msg td{padding:2px 10px 7px!important;border-bottom:1px solid #161b22!important}
+.err-msg-txt{font-size:11px;color:#8b949e;word-break:break-all;white-space:pre-wrap;line-height:1.5;display:block}
 /* 히트맵 */
 .heatmap-wrap{overflow-x:auto;border-radius:8px;border:1px solid #30363d}
 .heatmap{width:100%;border-collapse:collapse;font-size:12px}
@@ -1500,8 +1565,7 @@ body{padding-bottom:80px}
   </div>
   <div class="meta" id="err-meta"></div>
   <div class="tbl-wrap">
-    <table class="log" id="err-table">
-      <thead><tr><th>시각</th><th>레벨</th><th>모듈</th></tr></thead>
+    <table class="log" id="err-table" style="min-width:320px">
       <tbody id="err-tbody"></tbody>
     </table>
   </div>
@@ -1866,7 +1930,6 @@ body{padding-bottom:80px}
 </div>
 
 <!-- 모달 -->
-<div id="pf-popup" class="pf-popup" onclick="event.stopPropagation()"></div>
 <div class="modal-bg" id="modal" onclick="closeModal(event)">
   <div class="modal">
     <button class="close-btn" onclick="document.getElementById('modal').classList.remove('show')">✕</button>
@@ -2190,13 +2253,14 @@ function badge_(lvl){
 async function loadStats() {
   try {
     const d = await fetch('/api/stats').then(r=>r.json());
-    document.getElementById('c-err').textContent   = (d.today['ERROR']||0)+(d.today['CRITICAL']||0);
-    document.getElementById('c-warn').textContent  = d.today['WARNING']||0;
+    const errCnt = (d.today['ERROR']||0)+(d.today['CRITICAL']||0);
+    document.getElementById('c-err').textContent   = errCnt.toLocaleString();
+    document.getElementById('c-warn').textContent  = (d.today['WARNING']||0).toLocaleString();
     const tot = Object.values(d.totals).reduce((a,v)=>a+v,0);
-    document.getElementById('c-total').textContent = tot;
+    document.getElementById('c-total').textContent = tot.toLocaleString();
     if(d.latest) document.getElementById('upd-txt').textContent = '갱신 '+d.latest.slice(5,16)+' KST';
 
-    const dates  = [...new Set(d.daily.map(x=>x.date))].sort();
+    const dates  = [...new Set(d.daily.map(x=>x.date))].sort().reverse();
     const maxN   = Math.max(1,...dates.map(dt=>d.daily.filter(x=>x.date===dt).reduce((a,x)=>a+x.cnt,0)));
     document.getElementById('err-chart').innerHTML = dates.map(dt=>{
       const rows = d.daily.filter(x=>x.date===dt);
@@ -2215,7 +2279,7 @@ async function loadStats() {
 }
 
 let _errPage = 1;
-const _ERR_PAGE_SIZE = 50;
+const _ERR_PAGE_SIZE = 20;
 
 async function loadErrors(page) {
   if(page !== undefined) _errPage = page;
@@ -2228,38 +2292,28 @@ async function loadErrors(page) {
   try {
     const d = await fetch('/api/errors?'+p).then(r=>r.json());
     const totalPages = Math.max(1, Math.ceil(d.total / _ERR_PAGE_SIZE));
-    document.getElementById('err-meta').textContent=`총 ${d.total}건 (${_errPage}/${totalPages}페이지)`;
+    document.getElementById('err-meta').textContent=`총 ${d.total.toLocaleString()}건 (${_errPage}/${totalPages}페이지)`;
     const tbody=document.getElementById('err-tbody');
     const pgEl=document.getElementById('err-pagination');
     if(!d.rows.length){
-      tbody.innerHTML='<tr><td colspan="3" class="empty">에러 없음 ✅</td></tr>';
+      tbody.innerHTML='<tr><td class="empty">에러 없음 ✅</td></tr>';
       pgEl.innerHTML='';
       return;
     }
-    _errData = d.rows;
-    tbody.innerHTML=d.rows.map((r,i)=>{
+    tbody.innerHTML=d.rows.map(r=>{
       const mod=r.module.split(':')[0].split('.').slice(-2).join('.');
-      return `<tr onclick="showErrDetail(${i})">
-        <td class="ts-col">${r.ts.slice(5,16)}</td>
-        <td>${badge(r.level)}</td>
-        <td title="${esc(r.module)}">${esc(mod)}</td>
+      return `<tr class="err-row-top">
+        <td><span class="ts-col">${r.ts.slice(5,16)}</span> ${badge(r.level)} <span style="font-size:11px;color:#8b949e" title="${esc(r.module)}">${esc(mod)}</span></td>
+      </tr><tr class="err-row-msg">
+        <td><span class="err-msg-txt">${esc(r.message)}</span></td>
       </tr>`;
     }).join('');
-    pgEl.innerHTML = `
+    pgEl.innerHTML = totalPages <= 1 ? '' : `
       <button class="btn" ${_errPage<=1?'disabled':''} onclick="loadErrors(${_errPage-1})">◀ 이전</button>
       <span style="color:#8b949e;font-size:11px">${_errPage} / ${totalPages} 페이지</span>
       <button class="btn" ${_errPage>=totalPages?'disabled':''} onclick="loadErrors(${_errPage+1})">다음 ▶</button>
     `;
   } catch(e){ console.error(e); }
-}
-
-let _errData = [];
-function showErrDetail(i) {
-  const r = _errData[i];
-  if (!r) return;
-  document.getElementById('modal-title').textContent = `[${r.level}] ${r.ts.slice(5,16)}`;
-  document.getElementById('modal-body').textContent  = `모듈: ${r.module}\n\n${r.message}`;
-  document.getElementById('modal').classList.add('show');
 }
 function clearFilter(){
   document.getElementById('f-date').value=_kstDate();
@@ -2386,12 +2440,24 @@ async function loadPortfolio() {
     tbody.innerHTML = d.holdings.map(h=>{
       const color = pnlColor(h.pnl_rt);
       const arrow = h.pnl_rt>=0?'▲':'▼';
-      return `<tr>
+      const pnlAmt = h.pnl_amt != null ? h.pnl_amt : (h.eval_amt != null ? h.eval_amt - h.avg * h.qty : 0);
+      const pnlSign = pnlAmt >= 0 ? '+' : '';
+      const evalAmt = h.eval_amt != null ? h.eval_amt.toLocaleString()+'원' : '-';
+      return `<tr class="pf-row" style="cursor:pointer" onclick="togglePfExpand('${h.symbol}',false)">
         <td><div class="pf-name">${esc(h.name)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
         <td>${h.qty.toLocaleString()}</td>
         <td>${h.avg.toLocaleString()}</td>
         <td>${h.current.toLocaleString()}</td>
-        <td class="pf-rate-cell" style="color:${color};font-weight:700" onclick="showPfPopup(event,'${h.symbol}',false)">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
+        <td class="pf-rate-cell" style="color:${color};font-weight:700">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</td>
+      </tr>
+      <tr id="pf-detail-${h.symbol}" class="pf-detail-row" style="display:none">
+        <td colspan="5" class="pf-detail-cell">
+          <div class="pf-detail-grid">
+            <span class="pf-dl">손익금액</span><span class="pf-dv" style="color:${color}">${pnlSign}${pnlAmt.toLocaleString()}원</span>
+            <span class="pf-dl">평가금액</span><span class="pf-dv">${evalAmt}</span>
+          </div>
+          <button class="btn-force-sell" onclick="forceSell(event,'${h.symbol}',false,${h.qty},'')">즉시 포지션 청산</button>
+        </td>
       </tr>`;
     }).join('');
   } catch(e){ console.error('portfolio',e); }
@@ -2578,60 +2644,50 @@ async function onPromptClick(event, agentName, isNight) {
 }
 function closeModal(e){ if(e.target.id==='modal') document.getElementById('modal').classList.remove('show'); }
 
-// ── 포트폴리오 수익률 팝업 ─────────────────────────────────
+// ── 포트폴리오 인라인 확장 ────────────────────────────────
 let _pfDataMap = {};
 let _ntPfDataMap = {};
 
-function showPfPopup(event, symbol, isNight) {
-  event.stopPropagation();
-  const h = isNight ? _ntPfDataMap[symbol] : _pfDataMap[symbol];
-  if (!h) return;
-  const popup = document.getElementById('pf-popup');
-
-  if (!isNight) {
-    const color = pnlColor(h.pnl_rt);
-    const arrow = h.pnl_rt >= 0 ? '▲' : '▼';
-    const pnlAmt = h.pnl_amt != null ? h.pnl_amt : (h.eval_amt - h.avg * h.qty);
-    const pnlSign = pnlAmt >= 0 ? '+' : '';
-    popup.innerHTML = `
-      <div class="pf-popup-title">${esc(h.name)}<span class="pf-popup-sym">${esc(h.symbol)}</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">수량</span><span class="pf-popup-val">${h.qty.toLocaleString()}주</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">평균단가</span><span class="pf-popup-val">${h.avg.toLocaleString()}원</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">현재가</span><span class="pf-popup-val">${h.current.toLocaleString()}원</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">수익률</span><span class="pf-popup-val" style="color:${color}">${arrow}${Math.abs(h.pnl_rt).toFixed(2)}%</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">손익금액</span><span class="pf-popup-val" style="color:${color}">${pnlSign}${pnlAmt.toLocaleString()}원</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">평가금액</span><span class="pf-popup-val">${h.eval_amt.toLocaleString()}원</span></div>`;
-  } else {
-    const rate = h.pnl_rate || h.pnl_rt || 0;
-    const color = pnlColor(rate);
-    const arrow = rate >= 0 ? '▲' : '▼';
-    const pnlAmt = h.pnl_amount || 0;
-    const pnlSign = pnlAmt >= 0 ? '+' : '';
-    popup.innerHTML = `
-      <div class="pf-popup-title">${esc(h.name||h.symbol)}<span class="pf-popup-sym">${esc(h.symbol)}</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">Qty</span><span class="pf-popup-val">${(h.quantity||h.qty||0).toLocaleString()} shares</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">Avg Price</span><span class="pf-popup-val">${fmtUSD(h.avg_price||h.avg||0)}</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">Current</span><span class="pf-popup-val">${fmtUSD(h.current_price||h.current||0)}</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">P&L%</span><span class="pf-popup-val" style="color:${color}">${arrow}${Math.abs(rate).toFixed(2)}%</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">P&L $</span><span class="pf-popup-val" style="color:${color}">${pnlSign}${fmtUSD(Math.abs(pnlAmt))}</span></div>
-      <div class="pf-popup-row"><span class="pf-popup-lbl">Value</span><span class="pf-popup-val">${fmtUSD(h.eval_amount||h.eval_amt||0)}</span></div>`;
-  }
-
-  popup.style.display = 'block';
-  const rect = event.target.getBoundingClientRect();
-  let top = rect.bottom + 6;
-  let left = rect.left;
-  const pw = popup.offsetWidth || 220;
-  const ph = popup.offsetHeight || 210;
-  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-  if (top + ph > window.innerHeight - 8) top = rect.top - ph - 6;
-  popup.style.top = top + 'px';
-  popup.style.left = left + 'px';
+function togglePfExpand(symbol, isNight) {
+  const prefix = isNight ? 'nt-pf-detail-' : 'pf-detail-';
+  const detailEl = document.getElementById(prefix + symbol);
+  if (!detailEl) return;
+  const isOpen = detailEl.style.display !== 'none';
+  // 다른 열린 행 모두 닫기
+  document.querySelectorAll('[id^="' + prefix + '"]').forEach(el => { el.style.display = 'none'; });
+  if (!isOpen) detailEl.style.display = '';
 }
 
-document.addEventListener('click', () => {
-  document.getElementById('pf-popup').style.display = 'none';
-});
+async function forceSell(event, symbol, isNight, qty, excd) {
+  event.stopPropagation();
+  const label = isNight ? symbol + ' (Night)' : symbol + ' (KR)';
+  if (!confirm('⚠️ ' + label + ' 전량 청산을 실행합니다.\n계속하시겠습니까?')) return;
+  const btn = event.currentTarget;
+  btn.disabled = true;
+  btn.textContent = '청산 중...';
+  try {
+    const url = isNight ? '/api/night/force-sell' : '/api/force-sell';
+    const body = isNight ? {symbol, qty: Number(qty), excd: excd||'NAS'} : {symbol, qty: Number(qty)};
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const res = await r.json();
+    if (r.ok && res.ok) {
+      btn.textContent = '✅ 청산 요청 완료';
+      btn.style.background = '#1c3a1c';
+      btn.style.borderColor = '#3fb950';
+      btn.style.color = '#3fb950';
+    } else {
+      throw new Error(res.detail || '요청 실패');
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '즉시 포지션 청산';
+    alert('오류: ' + e.message);
+  }
+}
 
 // ── 채팅 탭 ─────────────────────────────────────────────
 let _chatPollTimer = null;
@@ -2920,12 +2976,27 @@ async function loadNightPortfolio() {
       const color = pnlColor(h.pnl_rate||h.pnl_rt||0);
       const rate = h.pnl_rate||h.pnl_rt||0;
       const arrow = rate>=0?'▲':'▼';
-      return `<tr>
-        <td><div class="pf-name">${esc(h.name||h.symbol)}</div><div class="pf-sym">${esc(h.symbol)}</div></td>
-        <td>${(h.quantity||h.qty||0).toLocaleString()}</td>
+      const pnlAmt = h.pnl_amount || 0;
+      const pnlSign = pnlAmt >= 0 ? '+' : '';
+      const sym = h.symbol;
+      const qty = h.quantity||h.qty||0;
+      const excd = h.excd||'NAS';
+      const evalAmt = fmtUSD(h.eval_amount||h.eval_amt||0);
+      return `<tr class="pf-row" style="cursor:pointer" onclick="togglePfExpand('${sym}',true)">
+        <td><div class="pf-name">${esc(h.name||h.symbol)}</div><div class="pf-sym">${esc(sym)}</div></td>
+        <td>${qty.toLocaleString()}</td>
         <td>${fmtUSD(h.avg_price||h.avg||0)}</td>
         <td>${fmtUSD(h.current_price||h.current||0)}</td>
-        <td class="pf-rate-cell" style="color:${color};font-weight:700" onclick="showPfPopup(event,'${h.symbol}',true)">${arrow}${Math.abs(rate).toFixed(2)}%</td>
+        <td class="pf-rate-cell" style="color:${color};font-weight:700">${arrow}${Math.abs(rate).toFixed(2)}%</td>
+      </tr>
+      <tr id="nt-pf-detail-${sym}" class="pf-detail-row" style="display:none">
+        <td colspan="5" class="pf-detail-cell">
+          <div class="pf-detail-grid">
+            <span class="pf-dl">P&amp;L $</span><span class="pf-dv" style="color:${color}">${pnlSign}${fmtUSD(Math.abs(pnlAmt))}</span>
+            <span class="pf-dl">평가금액</span><span class="pf-dv">${evalAmt}</span>
+          </div>
+          <button class="btn-force-sell" onclick="forceSell(event,'${sym}',true,${qty},'${excd}')">즉시 포지션 청산</button>
+        </td>
       </tr>`;
     }).join('');
   } catch(e){ console.error('night-portfolio',e); }

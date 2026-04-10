@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 _MODE_REQ          = Path("commands/mode_request.json")
 _CHAT_DIR          = Path("commands/chat")
+_FORCE_SELL_DIR    = Path("commands")
 _AGENT_CONTEXT_PATH = Path("logs/agent_context.json")
 
 import holidays
@@ -155,6 +156,34 @@ async def _chat_handler(agents_map: dict) -> None:
                     req_file.unlink(missing_ok=True)
         except Exception as e:
             logger.debug(f"[채팅] 핸들러 오류: {e}")
+
+
+async def _force_sell_handler(broker: "KISBroker") -> None:
+    """commands/force_sell_{symbol}.json 청산 요청 처리 (2초 폴링)"""
+    while True:
+        await asyncio.sleep(2)
+        try:
+            _FORCE_SELL_DIR.mkdir(parents=True, exist_ok=True)
+            for req_file in sorted(_FORCE_SELL_DIR.glob("force_sell_*.json")):
+                try:
+                    req = json.loads(req_file.read_text(encoding="utf-8"))
+                    symbol = req.get("symbol", "")
+                    qty = int(req.get("qty", 0))
+                    req_file.unlink(missing_ok=True)
+                    if not symbol or qty <= 0:
+                        logger.warning(f"[청산요청] 잘못된 요청: {req}")
+                        continue
+                    logger.info(f"[청산요청] {symbol} {qty}주 즉시 청산 시작")
+                    try:
+                        order = await broker.sell(symbol, qty, 0)
+                        logger.info(f"[청산요청] {symbol} 청산 완료: {order}")
+                    except Exception as e:
+                        logger.error(f"[청산요청] {symbol} 청산 실패: {e}")
+                except Exception as e:
+                    logger.warning(f"[청산요청] 파일 처리 실패 {req_file.name}: {e}")
+                    req_file.unlink(missing_ok=True)
+        except Exception as e:
+            logger.debug(f"[청산요청] 핸들러 오류: {e}")
 
 
 def _is_pre_market_or_market() -> bool:
@@ -480,6 +509,7 @@ async def main() -> None:
         "투자성향관리자": tendency_agent,
     }
     asyncio.create_task(_chat_handler(_agents_map))
+    asyncio.create_task(_force_sell_handler(broker))
 
     # Telegram 폴링 시작 — 네트워크 미준비 or API 일시 오류 시 재시도
     for attempt in range(1, 6):
