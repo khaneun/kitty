@@ -1285,25 +1285,25 @@ body{padding-bottom:80px}
 <header>
   <div class="logo">
     <img class="logo-img" id="logo-img" src="__KITTY_LOGO__" alt="kitty">
-    <span id="logo-text">🐱 Kitty Monitor</span>
+    <span id="logo-text">Kitty Monitor</span>
   </div>
   <div class="gnb">
     <div class="view-switch">
-      <button class="view-btn active" id="view-kitty" onclick="switchView('kitty')">🐱 Kitty</button>
-      <button class="view-btn" id="view-night" onclick="switchView('night')">🌙 Night</button>
+      <button class="view-btn active" id="view-kitty" onclick="switchView('kitty')">Kitty</button>
+      <button class="view-btn" id="view-night" onclick="switchView('night')">Night</button>
     </div>
     <select id="gnb-mode" class="gnb-select" onchange="onModeChange(this.value)" title="매매 모드">
       <option value="paper">📄 paper</option>
       <option value="live">🔴 live</option>
     </select>
   </div>
-  <div class="upd"><span class="dot"></span><span id="upd-txt">연결 중...</span></div>
 </header>
 
 <div class="tabs">
   <div class="tab active" id="main-tab-agents" onclick="switchMain('agents')">🤖 성적표</div>
   <div class="tab" id="main-tab-trades" onclick="switchMain('trades')">📒 매매일지</div>
   <div class="tab" id="main-tab-admin" onclick="switchMain('admin')">⚙️ 관리</div>
+  <div class="upd" style="margin-left:auto;padding-right:12px"><span class="dot"></span><span id="upd-txt">연결 중...</span></div>
 </div>
 <div class="subtabs" id="subtabs" style="display:none">
   <div class="subtab active" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
@@ -1402,8 +1402,8 @@ body{padding-bottom:80px}
       <span id="nt-badge" class="tendency-badge">-</span>
     </div>
     <div class="tendency-dims" id="nt-dims">
-      <div class="td-dim"><span class="td-dim-name">Take Profit</span><span id="nt-tp-lv" class="td-dim-lv lv-2">L2</span><span id="nt-tp" class="td-dim-val">-</span><span id="nt-tp-sub" class="td-dim-sub">-</span></div>
-      <div class="td-dim"><span class="td-dim-name">Stop Loss</span><span id="nt-sl-lv" class="td-dim-lv lv-2">L2</span><span id="nt-sl" class="td-dim-val">-</span><span id="nt-sl-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">T/P</span><span id="nt-tp-lv" class="td-dim-lv lv-2">L2</span><span id="nt-tp" class="td-dim-val">-</span><span id="nt-tp-sub" class="td-dim-sub">-</span></div>
+      <div class="td-dim"><span class="td-dim-name">S/L</span><span id="nt-sl-lv" class="td-dim-lv lv-2">L2</span><span id="nt-sl" class="td-dim-val">-</span><span id="nt-sl-sub" class="td-dim-sub">-</span></div>
       <div class="td-dim"><span class="td-dim-name">Cash</span><span id="nt-cash-lv" class="td-dim-lv lv-2">L2</span><span id="nt-cash" class="td-dim-val">-</span><span id="nt-cash-sub" class="td-dim-sub">-</span></div>
       <div class="td-dim"><span class="td-dim-name">Weight</span><span id="nt-wt-lv" class="td-dim-lv lv-2">L2</span><span id="nt-wt" class="td-dim-val">-</span><span id="nt-wt-sub" class="td-dim-sub">-</span></div>
       <div class="td-dim"><span class="td-dim-name">Entry</span><span id="nt-en-lv" class="td-dim-lv lv-2">L2</span><span id="nt-en" class="td-dim-val">-</span><span id="nt-en-sub" class="td-dim-sub">-</span></div>
@@ -1647,7 +1647,7 @@ function switchView(view) {
   _currentView = view;
   document.getElementById('view-kitty').classList.toggle('active', view==='kitty');
   document.getElementById('view-night').classList.toggle('active', view==='night');
-  document.getElementById('logo-text').textContent = view==='kitty' ? '🐱 Kitty Monitor' : '🌙 Night Monitor';
+  document.getElementById('logo-text').textContent = view==='kitty' ? 'Kitty Monitor' : 'Night Monitor';
   document.getElementById('logo-img').style.background = view==='night' ? '#000000' : '#ffffff';
   // 현재 활성 탭을 그대로 유지하되 내용을 새 view에 맞게 리로드
   const activeMain = ['agents','trades','admin'].find(t =>
