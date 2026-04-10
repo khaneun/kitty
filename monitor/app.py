@@ -777,7 +777,7 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
                     pnl_rate = pnl_map.get(sym)
                     result.append({
                         "date": date, "time": ts, "symbol": sym,
-                        "name": r.get("name", ""), "side": "매수", "action": action,
+                        "name": r.get("name") or order.get("name", ""), "side": "매수", "action": action,
                         "classify": _classify_trade(action, reason, pnl_rate),
                         "quantity": r.get("quantity", 0), "price": r.get("price", 0),
                         "status": r.get("status", ""), "reason": reason,
@@ -794,7 +794,7 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
                     pnl_rate = pnl_map.get(sym)
                     result.append({
                         "date": date, "time": ts, "symbol": sym,
-                        "name": r.get("name", ""), "side": "매도", "action": action,
+                        "name": r.get("name") or order.get("name", ""), "side": "매도", "action": action,
                         "classify": _classify_trade(action, reason, pnl_rate),
                         "quantity": r.get("quantity", 0), "price": r.get("price", 0),
                         "status": r.get("status", ""), "reason": reason,
