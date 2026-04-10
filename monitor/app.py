@@ -1255,6 +1255,14 @@ body{padding-bottom:80px}
 .cls-익절{background:#3d1010;color:#f85149}.cls-손절{background:#0d1a3d;color:#4493f8}
 .cls-신규매수{background:#0d2d3d;color:#58a6ff}.cls-추가매수{background:#142814;color:#57ab5a}
 .cls-종목교체{background:#2d2500;color:#d29922}.cls-매도{background:#21262d;color:#8b949e}
+/* 매매일지 가로바 */
+.tr-bar-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 16px;margin-bottom:12px}
+.tr-bar-track{display:flex;height:18px;border-radius:6px;overflow:hidden;background:#21262d;gap:1px}
+.tr-bar-seg{height:100%;transition:width .3s;min-width:0}
+.tr-bar-labels{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap}
+.tr-bar-lbl{display:flex;align-items:center;gap:5px;font-size:12px;color:#8b949e}
+.tr-bar-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.tr-bar-cnt{font-weight:700;color:#c9d1d9;margin-left:2px}
 </style>
 </head>
 <body>
@@ -1514,15 +1522,20 @@ body{padding-bottom:80px}
 <!-- ══ 매매일지 탭 ══ -->
 <div id="tab-trades" class="tab-content">
 <div class="wrap">
-  <div class="cards">
-    <div class="card"><div class="num blue"   id="tr-buy-cnt">-</div><div class="lbl">매수</div></div>
-    <div class="card"><div class="num gray"   id="tr-sell-cnt">-</div><div class="lbl">매도</div></div>
-    <div class="card"><div class="num yellow" id="tr-total-cnt">-</div><div class="lbl">전체</div></div>
-  </div>
-  <div class="cards">
-    <div class="card"><div class="num green"  id="tr-profit-cnt">-</div><div class="lbl">익절</div></div>
-    <div class="card"><div class="num red"    id="tr-loss-cnt">-</div><div class="lbl">손절</div></div>
-    <div class="card"><div class="num gray"   id="tr-other-cnt">-</div><div class="lbl">기타매도</div></div>
+  <div class="tr-bar-wrap">
+    <div class="tr-bar-track">
+      <div class="tr-bar-seg" id="tr-bar-buy"    style="background:#1c4a7a;width:0%"></div>
+      <div class="tr-bar-seg" id="tr-bar-profit" style="background:#1a4a1a;width:0%"></div>
+      <div class="tr-bar-seg" id="tr-bar-loss"   style="background:#4a1010;width:0%"></div>
+      <div class="tr-bar-seg" id="tr-bar-other"  style="background:#2d2f33;width:0%"></div>
+    </div>
+    <div class="tr-bar-labels">
+      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#58a6ff"></div>매수 <span class="tr-bar-cnt" id="tr-buy-cnt">-</span></div>
+      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#3fb950"></div>익절 <span class="tr-bar-cnt" id="tr-profit-cnt">-</span></div>
+      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#f85149"></div>손절 <span class="tr-bar-cnt" id="tr-loss-cnt">-</span></div>
+      <div class="tr-bar-lbl"><div class="tr-bar-dot" style="background:#484f58"></div>기타매도 <span class="tr-bar-cnt" id="tr-other-cnt">-</span></div>
+      <div class="tr-bar-lbl" style="margin-left:auto"><div class="tr-bar-dot" style="background:#d29922"></div>전체 <span class="tr-bar-cnt" id="tr-total-cnt">-</span></div>
+    </div>
   </div>
   <div class="filters">
     <input type="date" id="tr-date">
@@ -1546,7 +1559,7 @@ body{padding-bottom:80px}
   <div class="meta" id="tr-meta"></div>
   <div class="tbl-wrap">
     <table class="log" style="min-width:400px">
-      <thead><tr><th>날짜/시각</th><th>종목</th><th>분류</th><th>수익률</th><th>상세</th></tr></thead>
+      <thead><tr><th>날짜/시각</th><th>종목</th><th>분류</th><th>상세</th></tr></thead>
       <tbody id="tr-tbody"></tbody>
     </table>
   </div>
@@ -2279,13 +2292,19 @@ async function loadTrades(resetPage) {
     const sells   = trades.filter(t => t.side === '매도').length;
     const profits = trades.filter(t => t.classify === '익절').length;
     const losses  = trades.filter(t => t.classify === '손절').length;
-    const others  = sells - profits - losses;
+    const others  = Math.max(0, sells - profits - losses);
+    const total   = trades.length;
     document.getElementById('tr-buy-cnt').textContent    = buys;
-    document.getElementById('tr-sell-cnt').textContent   = sells;
-    document.getElementById('tr-total-cnt').textContent  = trades.length;
+    document.getElementById('tr-total-cnt').textContent  = total;
     document.getElementById('tr-profit-cnt').textContent = profits;
     document.getElementById('tr-loss-cnt').textContent   = losses;
-    document.getElementById('tr-other-cnt').textContent  = Math.max(0, others);
+    document.getElementById('tr-other-cnt').textContent  = others;
+    // 가로바 세그먼트 너비
+    const pct = n => total > 0 ? (n / total * 100).toFixed(1)+'%' : '0%';
+    document.getElementById('tr-bar-buy').style.width    = pct(buys);
+    document.getElementById('tr-bar-profit').style.width = pct(profits);
+    document.getElementById('tr-bar-loss').style.width   = pct(losses);
+    document.getElementById('tr-bar-other').style.width  = pct(others);
 
     renderTradesPage();
   } catch(e){ console.error('trades',e); }
@@ -2305,7 +2324,7 @@ function renderTradesPage() {
 
   const tbody = document.getElementById('tr-tbody');
   if(!total) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">거래 내역 없음</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">거래 내역 없음</td></tr>';
     document.getElementById('tr-pagination').innerHTML = '';
     return;
   }
@@ -2313,14 +2332,11 @@ function renderTradesPage() {
   _trSliceData = slice;
   tbody.innerHTML = slice.map((t, i) => {
     const clsCss = 'trade-cls cls-'+t.classify;
-    const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(1)+'%' : '-';
-    const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';
     const srcIcon = t.source==='night' ? '🌙' : '🐱';
     return `<tr>
       <td class="ts-col">${srcIcon} ${t.date.slice(5)}<br><span style="color:#484f58">${t.time}</span></td>
       <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
       <td><span class="${clsCss}">${t.classify}</span></td>
-      <td style="text-align:right;color:${pnlColor};font-weight:700">${pnlTxt}</td>
       <td style="text-align:center"><button class="btn-detail" onclick="showTradeDetail(${i})">자세히</button></td>
     </tr>`;
   }).join('');
