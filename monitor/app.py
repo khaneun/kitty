@@ -1112,7 +1112,7 @@ table.pf tr:last-child td{border-bottom:none}
 .pf-popup-lbl{color:#8b949e}
 .pf-popup-val{color:#c9d1d9;font-weight:600}
 table.pf tr:hover td{background:#161b22}
-.pf-name{font-weight:600;color:#f0f6fc;font-size:12px}
+.pf-name{font-weight:600;color:#f0f6fc;font-size:12px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pf-sym{font-size:10px;color:#8b949e}
 /* 히트맵 */
 .heatmap-wrap{overflow-x:auto;border-radius:8px;border:1px solid #30363d}
@@ -1268,8 +1268,10 @@ body{padding-bottom:80px}
 .tr-bar-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .tr-bar-cnt{font-weight:700;color:#c9d1d9;margin-left:1px}
 /* 매매일지 컬럼 너비 */
-table.log th:nth-child(3),table.log td:nth-child(3){width:72px}
-table.log th:nth-child(4),table.log td:nth-child(4){width:52px;text-align:center}
+table.log th:nth-child(1),table.log td:nth-child(1){width:62px}
+table.log th:nth-child(2),table.log td:nth-child(2){max-width:120px}
+table.log th:nth-child(3),table.log td:nth-child(3){width:64px}
+table.log th:nth-child(4),table.log td:nth-child(4){width:48px;text-align:center}
 </style>
 </head>
 <body>
@@ -1325,12 +1327,11 @@ table.log th:nth-child(4),table.log td:nth-child(4){width:52px;text-align:center
     </select>
     <input type="text" id="f-q" placeholder="메시지 검색">
     <button class="btn btn-pri" onclick="loadErrors()">조회</button>
-    <button class="btn" onclick="clearFilter()">초기화</button>
   </div>
   <div class="meta" id="err-meta"></div>
   <div class="tbl-wrap">
     <table class="log">
-      <thead><tr><th>시각</th><th>레벨</th><th>모듈</th><th>메시지 (클릭=전체)</th></tr></thead>
+      <thead><tr><th>시각</th><th>레벨</th><th>모듈</th></tr></thead>
       <tbody id="err-tbody"></tbody>
     </table>
   </div>
@@ -1796,16 +1797,14 @@ async function loadErrors() {
     const d = await fetch('/api/errors?'+p).then(r=>r.json());
     document.getElementById('err-meta').textContent=`총 ${d.total}건 중 ${Math.min(d.total,200)}건`;
     const tbody=document.getElementById('err-tbody');
-    if(!d.rows.length){ tbody.innerHTML='<tr><td colspan="4" class="empty">에러 없음 ✅</td></tr>'; return; }
+    if(!d.rows.length){ tbody.innerHTML='<tr><td colspan="3" class="empty">에러 없음 ✅</td></tr>'; return; }
     tbody.innerHTML=d.rows.map(r=>{
       const mod=r.module.split(':')[0].split('.').slice(-2).join('.');
-      const msg=esc(r.message.length>90?r.message.slice(0,90)+'…':r.message);
       const full=JSON.stringify(r.message);
-      return `<tr>
+      return `<tr style="cursor:pointer" onclick="showModal('${esc(r.ts)}','${esc(r.level)}','${esc(r.module)}',${full})">
         <td class="ts-col">${r.ts.slice(5,16)}</td>
         <td>${badge(r.level)}</td>
         <td class="mod-col" title="${esc(r.module)}">${esc(mod)}</td>
-        <td class="msg-col" onclick="showModal('${esc(r.ts)}','${esc(r.level)}','${esc(r.module)}',${full})">${msg}</td>
       </tr>`;
     }).join('');
   } catch(e){ console.error(e); }
