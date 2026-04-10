@@ -31,6 +31,12 @@ def _sf(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# ── 시세 캐시 TTL ──────────────────────────────────────────────────────────────
+# 한 사이클 내에서 동일 종목 중복 조회를 방지.
+# (바로미터 10종목 + volume_rank 20종목 → candidate_symbols 루프에서 재조회 차단)
+_QUOTE_CACHE_TTL: float = 90.0   # seconds
+
+
 # ── 모델 ──────────────────────────────────────────────────────────────────────
 
 class OverseasQuote(BaseModel):
@@ -107,8 +113,8 @@ class KISOverseasBroker:
 
     # 연속 주문 제한: 1.2초 간격 (규정 1초 + 0.2초 여유)
     _ORDER_INTERVAL = 1.2
-    # 시세 조회 간격: 1.0초 (KIS 해외 API — 분당 ~55건으로 보수적 유지)
-    _QUOTE_INTERVAL = 1.0
+    # 시세 조회 간격: 1.5초 (KIS 해외 API — 500/503 빈발 방지를 위해 보수적으로 유지)
+    _QUOTE_INTERVAL = 1.5
 
     def __init__(self) -> None:
         self._access_token: str | None = None
@@ -116,6 +122,9 @@ class KISOverseasBroker:
         self._client = httpx.AsyncClient(timeout=20.0, verify=False)
         self._last_order_ts: float = 0.0
         self._last_quote_ts: float = 0.0
+        # 시세 캐시: symbol → (monotonic_ts, OverseasQuote)
+        # 한 사이클 내 동일 종목 중복 API 호출 방지 (_QUOTE_CACHE_TTL 초 유효)
+        self._quote_cache: dict[str, tuple[float, "OverseasQuote"]] = {}
 
     @property
     def _mode(self) -> str:
@@ -200,7 +209,8 @@ class KISOverseasBroker:
                     )
                     continue
                 if resp.status_code in (500, 503):
-                    wait = min((attempt + 1) * 2.0, 8.0) + random.uniform(0.0, 1.0)
+                    # KIS 해외 API 서버 오류 — 짧은 대기는 효과 없으므로 보수적으로 대기
+                    wait = min((attempt + 1) * 5.0, 30.0) + random.uniform(0.0, 3.0)
                     logger.warning(
                         f"[Night:KIS] {label} 서버오류({resp.status_code}) — "
                         f"{wait:.1f}s 대기 ({attempt + 1}/{retries})"
@@ -245,7 +255,19 @@ class KISOverseasBroker:
     # ── 시세 조회 ────────────────────────────────────────────────────────────
 
     async def get_quote(self, symbol: str, excd: str = "NAS") -> OverseasQuote:
-        """해외주식 현재가 조회 (TR: HHDFS76200200)"""
+        """해외주식 현재가 조회 (TR: HHDFS76200200)
+
+        _QUOTE_CACHE_TTL(90s) 이내에 같은 종목을 재조회하면 캐시 반환.
+        (한 사이클 내 바로미터/volume_rank/candidate 중복 조회 방지)
+        """
+        # ── 캐시 확인 ──────────────────────────────────────────────────────────
+        cached = self._quote_cache.get(symbol)
+        if cached:
+            cached_ts, cached_quote = cached
+            if time.monotonic() - cached_ts < _QUOTE_CACHE_TTL:
+                return cached_quote
+
+        # ── API 호출 ───────────────────────────────────────────────────────────
         await self._throttle_quote()
 
         async def _req():
@@ -258,7 +280,7 @@ class KISOverseasBroker:
 
         resp = await self._call_with_retry(_req, f"{symbol} 시세조회")
         output = resp.json().get("output", {})
-        return OverseasQuote(
+        quote = OverseasQuote(
             symbol=symbol,
             name=output.get("rsym", symbol),
             excd=excd,
@@ -266,6 +288,8 @@ class KISOverseasBroker:
             change_rate=_sf(output.get("rate")),
             volume=int(_sf(output.get("tvol"))),
         )
+        self._quote_cache[symbol] = (time.monotonic(), quote)
+        return quote
 
     # ── 잔고 조회 ────────────────────────────────────────────────────────────
 
@@ -346,7 +370,13 @@ class KISOverseasBroker:
         }
 
     async def get_available_usd(self) -> float:
-        """해외주식 주문 가능 USD 금액 조회"""
+        """해외주식 주문 가능 USD 금액 조회
+
+        KIS `inquire-psamount`는 반드시 ITEM_CD와 OVRS_ORD_UNPR을 요구함.
+        (특히 모의투자: ITEM_CD="" 시 rt_cd=1, 종목코드정보를 확인하세요 에러)
+        → AAPL/NASD/200 USD를 기준 파라미터로 사용.
+        ovrs_ord_psbl_amt 필드는 계좌 전체 가용 USD 현금이므로 종목에 무관하게 동일한 값 반환.
+        """
         tr_id = _BUYABLE_TR[self._mode]
 
         async def _req():
@@ -358,22 +388,25 @@ class KISOverseasBroker:
                     "CANO": self._cano,
                     "ACNT_PRDT_CD": self._acnt_prdt_cd,
                     "OVRS_EXCG_CD": "NASD",
-                    "OVRS_ORD_UNPR": "0",
-                    "ITEM_CD": "",
+                    "OVRS_ORD_UNPR": "200",  # 기준가격 (실제 계산과 무관; ovrs_ord_psbl_amt는 가용 USD 총액)
+                    "ITEM_CD": "AAPL",       # KIS paper API는 유효 종목코드 필수
                 },
             )
 
         resp = await self._call_with_retry(_req, "해외주문가능금액")
         data = resp.json()
         if data.get("rt_cd") != "0":
-            logger.warning(f"[Night:KIS] available USD query failed: rt_cd={data.get('rt_cd')} msg={data.get('msg1')}")
+            logger.warning(
+                f"[Night:KIS] available USD query failed: "
+                f"rt_cd={data.get('rt_cd')} msg={data.get('msg1')}"
+            )
             return 0.0
         output = data.get("output", {})
         # KIS API 일부 응답이 list로 오는 경우 방어 처리
         if isinstance(output, list):
             output = output[0] if output else {}
         usd = _sf(output.get("ovrs_ord_psbl_amt"))
-        logger.info(f"[Night:KIS] available USD: ${usd:,.2f} (output keys: {list(output.keys()) if isinstance(output, dict) else 'list'})")
+        logger.info(f"[Night:KIS] available USD: ${usd:,.2f}")
         return usd
 
     # ── 매수 ─────────────────────────────────────────────────────────────────
@@ -429,6 +462,9 @@ class KISOverseasBroker:
             "PDNO": symbol,
             "ORD_QTY": str(quantity),
             "OVRS_ORD_UNPR": f"{price:.2f}" if price > 0 else "0",
+            "CTAC_TLNO": "",
+            "MGCO_APTM_ODNO": "",
+            "SLL_TYPE": "",       # 매수 시 공란
             "ORD_SVR_DVSN_CD": "0",
             "ORD_DVSN": ord_dvsn,
         }
@@ -484,6 +520,9 @@ class KISOverseasBroker:
             "PDNO": symbol,
             "ORD_QTY": str(quantity),
             "OVRS_ORD_UNPR": f"{price:.2f}" if price > 0 else "0",
+            "CTAC_TLNO": "",
+            "MGCO_APTM_ODNO": "",
+            "SLL_TYPE": "00",     # 매도 시 "00" 필수 (누락 시 모의투자 에러 발생)
             "ORD_SVR_DVSN_CD": "0",
             "ORD_DVSN": ord_dvsn,
         }
@@ -631,16 +670,39 @@ class KISOverseasBroker:
         data = resp.json()
         items = data.get("output2", [])[:count]
         result = []
+        now_ts = time.monotonic()
         for item in items:
-            result.append({
-                "symbol": item.get("symb", ""),
+            sym = item.get("symb", "")
+            if not sym:
+                continue
+            entry = {
+                "symbol": sym,
                 "name": item.get("name", ""),
                 "excd": excd,
                 "current_price": _sf(item.get("last")),
                 "change_rate": _sf(item.get("rate")),
                 "volume": int(_sf(item.get("tvol"))),
-            })
+            }
+            result.append(entry)
+            # 반환 데이터로 시세 캐시 선 채우기 → 이후 candidate 루프에서 재조회 방지
+            if sym not in self._quote_cache:
+                self._quote_cache[sym] = (now_ts, OverseasQuote(
+                    symbol=sym,
+                    name=entry["name"],
+                    excd=excd,
+                    current_price=entry["current_price"],
+                    change_rate=entry["change_rate"],
+                    volume=entry["volume"],
+                ))
         return result
+
+    # ── 모드 전환 ────────────────────────────────────────────────────────────
+
+    def reset_token(self) -> None:
+        """캐시된 토큰 강제 만료 — 모드 전환(paper↔live) 후 호출"""
+        self._access_token = None
+        self._token_expires_at = datetime.min
+        self._quote_cache.clear()
 
     # ── 리소스 정리 ──────────────────────────────────────────────────────────
 

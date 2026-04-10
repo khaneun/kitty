@@ -534,6 +534,25 @@ async def api_set_mode(req: Request):
         raise HTTPException(500, str(e))
 
 
+@app.post("/api/night/set-mode")
+async def api_night_set_mode(req: Request):
+    """Night 모드 전환 요청 — night-commands/night_mode_request.json 에 기록"""
+    _auth(req)
+    body = await req.json()
+    mode = body.get("mode", "")
+    if mode not in ("paper", "live"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "mode must be 'paper' or 'live'")
+    try:
+        NIGHT_CMD_DIR.mkdir(parents=True, exist_ok=True)
+        night_mode_req = NIGHT_CMD_DIR / "night_mode_request.json"
+        night_mode_req.write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        return {"ok": True, "mode": mode}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, str(e))
+
+
 @app.post("/api/force-sell")
 async def api_force_sell(req: Request):
     """KR 종목 즉시 청산 요청 — commands/force_sell_{symbol}.json 기록"""
@@ -2324,6 +2343,21 @@ function clearFilter(){
 }
 
 // ── GNB 모드 셀렉터 ─────────────────────────────────────
+// 전환 요청 후 스냅샷이 반영되기 전까지 셀렉터가 롤백되는 것을 방지
+let _pendingKittyMode = null;
+let _pendingNightMode = null;
+
+function _syncGnbMode(snapshotMode, view) {
+  const pending = view === 'night' ? _pendingNightMode : _pendingKittyMode;
+  if(pending && snapshotMode !== pending) return; // 아직 전환 중 — 덮어쓰지 않음
+  if(view === 'night') _pendingNightMode = null;
+  else _pendingKittyMode = null;
+  const sel = document.getElementById('gnb-mode');
+  sel.value = snapshotMode;
+  sel.dataset.current = snapshotMode;
+  updateModeStyle(sel, snapshotMode);
+}
+
 async function onModeChange(newMode) {
   const sel = document.getElementById('gnb-mode');
   if(newMode === 'live') {
@@ -2334,7 +2368,8 @@ async function onModeChange(newMode) {
     }
   }
   try {
-    const r = await fetch('/api/set-mode', {
+    const endpoint = _currentView === 'night' ? '/api/night/set-mode' : '/api/set-mode';
+    const r = await fetch(endpoint, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({mode: newMode})
@@ -2342,6 +2377,8 @@ async function onModeChange(newMode) {
     if(r.ok) {
       sel.dataset.current = newMode;
       updateModeStyle(sel, newMode);
+      if(_currentView === 'night') _pendingNightMode = newMode;
+      else _pendingKittyMode = newMode;
     } else {
       alert('모드 전환 요청 실패');
       sel.value = sel.dataset.current || 'paper';
@@ -2414,13 +2451,8 @@ async function loadPortfolio() {
     const fmtW = n => n.toLocaleString('ko-KR');
     const pnlColor = n => n>=0?'#f85149':'#4493f8';  // 한국 기준: 상승=빨강, 하락=파랑
 
-    // GNB 셀렉터 동기화
-    if(d.trading_mode) {
-      const sel = document.getElementById('gnb-mode');
-      sel.value = d.trading_mode;
-      sel.dataset.current = d.trading_mode;
-      updateModeStyle(sel, d.trading_mode);
-    }
+    // GNB 셀렉터 동기화 (전환 요청 pending 중이면 스킵)
+    if(d.trading_mode) _syncGnbMode(d.trading_mode, 'kitty');
 
     document.getElementById('pf-total-eval').textContent = d.total_eval ? fmtW(d.total_eval) : '-';
     const pnlEl = document.getElementById('pf-total-pnl');
@@ -2957,6 +2989,9 @@ async function loadNightPortfolio() {
     const d = await fetch('/api/night/portfolio').then(r=>r.json());
     const fmtUSD = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
     const pnlColor = n => n>=0?'#3fb950':'#f85149';
+
+    // GNB 셀렉터 동기화 (Night 뷰일 때 + 전환 요청 pending 중이면 스킵)
+    if(d.trading_mode && _currentView === 'night') _syncGnbMode(d.trading_mode, 'night');
 
     document.getElementById('nt-total-eval').textContent = d.total_eval ? fmtUSD(d.total_eval) : '-';
     const pnlEl = document.getElementById('nt-total-pnl');

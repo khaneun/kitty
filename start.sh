@@ -109,9 +109,10 @@ _NIGHT_ANTHROPIC_API_KEY=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]
 _NIGHT_KIS_PAPER_KEY=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_PAPER_APP_KEY',''))" "$SECRET")
 _NIGHT_KIS_PAPER_SECRET=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_PAPER_APP_SECRET',''))" "$SECRET")
 _NIGHT_KIS_PAPER_ACCOUNT=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_KIS_PAPER_ACCOUNT_NUMBER',''))" "$SECRET")
+_NIGHT_TRADING_MODE=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('NIGHT_TRADING_MODE','paper'))" "$SECRET")
 
 cat > /home/ec2-user/kitty/.env.night << NIGHTEOF
-NIGHT_TRADING_MODE=paper
+NIGHT_TRADING_MODE=${_NIGHT_TRADING_MODE}
 NIGHT_AI_PROVIDER=${_NIGHT_AI_PROVIDER}
 NIGHT_AI_MODEL=${_NIGHT_AI_MODEL}
 NIGHT_KIS_APP_KEY=${_NIGHT_KIS_APP_KEY}

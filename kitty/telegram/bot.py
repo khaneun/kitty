@@ -127,12 +127,17 @@ class TelegramReporter:
         for name, handler in cmds:
             self._app.add_handler(CommandHandler(name, self._guard(handler)))
 
+    # 허용된 사용자 ID (화이트리스트)
+    _ALLOWED_USER_IDS: frozenset[str] = frozenset({"6644164667"})
+
     def _guard(
         self, fn: Callable[..., Coroutine[Any, Any, None]]
     ) -> Callable[..., Coroutine[Any, Any, None]]:
-        """설정된 chat_id 이외의 요청 차단"""
+        """chat_id + user_id 이중 차단 — 화이트리스트에 없는 모든 요청 거부"""
         async def wrapper(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-            if update.effective_chat and str(update.effective_chat.id) != str(settings.telegram_chat_id):
+            chat_ok = update.effective_chat and str(update.effective_chat.id) == str(settings.telegram_chat_id)
+            user_ok = update.effective_user and str(update.effective_user.id) in self._ALLOWED_USER_IDS
+            if not chat_ok or not user_ok:
                 await update.message.reply_text("⛔ 권한 없음")  # type: ignore[union-attr]
                 return
             await fn(update, ctx)

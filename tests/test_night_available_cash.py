@@ -141,22 +141,17 @@ async def test_get_available_usd_live():
 @pytest.mark.skipif(not _HAS_CREDS, reason="KIS API 자격증명 없음")
 @pytest.mark.asyncio
 async def test_raw_api_response_live():
-    """실제 API 응답 필드 전체 출력 — 필드명 확인용 디버그 테스트"""
-    import httpx
+    """실제 API 응답 필드 전체 출력 — 필드명 확인용 디버그 테스트
+
+    Note: inquire-psamount는 유효한 ITEM_CD 필수 (특히 모의투자).
+    ITEM_CD="" → rt_cd=1, 모의투자 종목코드정보를 확인하세요 에러.
+    AAPL/NASD/200 기준으로 호출하면 ovrs_ord_psbl_amt = 계좌 전체 가용 USD 현금.
+    """
     from kitty_night.broker.kis_overseas import KISOverseasBroker, _BUYABLE_TR
 
     broker = KISOverseasBroker()
     try:
-        token = await broker._get_token()
         tr_id = _BUYABLE_TR[broker._mode]
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "appkey": broker._client.headers.get("appkey", ""),
-            "appsecret": broker._client.headers.get("appsecret", ""),
-            "tr_id": tr_id,
-            "Content-Type": "application/json; charset=utf-8",
-        }
-        # _headers() 메서드로 정확한 헤더 가져오기
         headers = await broker._headers(tr_id)
 
         resp = await broker._client.get(
@@ -166,8 +161,8 @@ async def test_raw_api_response_live():
                 "CANO": broker._cano,
                 "ACNT_PRDT_CD": broker._acnt_prdt_cd,
                 "OVRS_EXCG_CD": "NASD",
-                "OVRS_ORD_UNPR": "0",
-                "ITEM_CD": "",
+                "OVRS_ORD_UNPR": "200",  # 기준가격 (실제 계산과 무관)
+                "ITEM_CD": "AAPL",       # 유효 종목코드 필수
             },
         )
         data = resp.json()
@@ -179,12 +174,12 @@ async def test_raw_api_response_live():
         assert data.get("rt_cd") == "0", (
             f"API 응답 실패: rt_cd={data.get('rt_cd')}, msg1={data.get('msg1')}\n"
             f"  → tr_id={tr_id}, mode={broker._mode}\n"
-            f"  → OVRS_EXCG_CD=NASD로 조회했을 때 실패하면 빈 문자열('') 시도 필요"
+            f"  → ITEM_CD=AAPL, OVRS_ORD_UNPR=200으로 호출"
         )
 
         output = data.get("output", {})
         if isinstance(output, list):
-            print(f"  ⚠️  output이 list임. output[0]={output[0] if output else 'empty'}")
+            print(f"  output이 list임. output[0]={output[0] if output else 'empty'}")
         else:
             print(f"  output keys: {list(output.keys())}")
             amt = output.get("ovrs_ord_psbl_amt", "FIELD_NOT_FOUND")

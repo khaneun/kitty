@@ -36,6 +36,7 @@ setup_night_logger()
 _KST = ZoneInfo("Asia/Seoul")
 _AGENT_CONTEXT_PATH = Path("night-logs/night_agent_context.json")
 _NIGHT_FORCE_SELL_DIR = Path("night-commands")
+_NIGHT_MODE_REQ = Path("night-commands/night_mode_request.json")
 
 # US market barometer symbols (major ETFs + mega caps)
 _BAROMETER_SYMBOLS = [
@@ -373,6 +374,17 @@ async def main() -> None:
     # Night 청산 요청 핸들러 백그라운드 태스크
     asyncio.create_task(_night_force_sell_handler(broker))
 
+    # 실전 모드 기동 시 경고 카운트다운
+    if night_settings.trading_mode.value == "live":
+        logger.warning("⚠️  LIVE MODE — 실제 자금으로 거래됩니다. 30초 후 시작...")
+        await reporter.send(
+            "⚠️ *LIVE MODE 기동!*\n"
+            "실제 자금으로 US 주식 자동매매를 시작합니다.\n"
+            "30초 안에 취소하려면 컨테이너를 중지하세요."
+        )
+        await asyncio.sleep(30)
+        logger.warning("⚠️  LIVE MODE 시작!")
+
     await reporter.send(
         f"🌙 *Kitty Night Mode Started!*\n"
         f"Mode: `{night_settings.trading_mode.value}`\n"
@@ -386,6 +398,22 @@ async def main() -> None:
 
     try:
         while True:
+            # 모니터 대시보드 모드 전환 요청 확인
+            if _NIGHT_MODE_REQ.exists():
+                try:
+                    req = json.loads(_NIGHT_MODE_REQ.read_text(encoding="utf-8"))
+                    new_mode = req.get("mode", "")
+                    if new_mode in ("paper", "live"):
+                        from kitty_night.config import TradingMode
+                        night_settings.trading_mode = TradingMode(new_mode)
+                        broker.reset_token()
+                        logger.info(f"[Night:모드전환] {new_mode}")
+                        await reporter.send(f"🔄 Night 모드 전환: `{new_mode}` (모니터 대시보드)")
+                except Exception as e:
+                    logger.warning(f"[Night:모드전환] 요청 처리 실패: {e}")
+                finally:
+                    _NIGHT_MODE_REQ.unlink(missing_ok=True)
+
             phase = get_market_phase()
 
             # Date rollover → send daily report and reset
