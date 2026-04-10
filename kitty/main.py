@@ -229,7 +229,7 @@ async def run_trading_cycle(
 ) -> None:
     """매매 사이클 1회 실행"""
     logger.info("=== 매매 사이클 시작 ===")
-    daily_report.begin_cycle()
+    daily_report.begin_cycle(mode=settings.trading_mode.value)
 
     # 0. 투자 성향 디렉티브 생성 (AI 호출 없음)
     tendency_directive = tendency_agent.get_directive()

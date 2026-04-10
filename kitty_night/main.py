@@ -133,7 +133,7 @@ async def run_trading_cycle(
 ) -> None:
     """Run one trading cycle"""
     logger.info("=== Night Trading Cycle Start ===")
-    daily_report.begin_cycle()
+    daily_report.begin_cycle(mode=night_settings.trading_mode.value)
 
     # 0. Tendency directive (no AI call)
     tendency_directive = tendency_agent.get_directive()

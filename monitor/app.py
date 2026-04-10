@@ -900,6 +900,7 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
             date = data.get("date", path.stem)
             for cycle in data.get("cycles", []):
                 ts = cycle.get("timestamp", "")
+                cycle_mode = cycle.get("mode", "paper")
                 # pnl_rate 맵 (symbol → pnl_rate) from stock_evaluation
                 pnl_map: dict[str, float] = {}
                 for ev in cycle.get("stock_evaluation", {}).get("evaluations", []):
@@ -927,7 +928,7 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
                         "classify": _classify_trade(action, reason, pnl_rate),
                         "quantity": r.get("quantity", 0), "price": r.get("price", 0),
                         "status": r.get("status", ""), "reason": reason,
-                        "pnl_rate": pnl_rate, "source": source,
+                        "pnl_rate": pnl_rate, "source": source, "mode": cycle_mode,
                     })
                 # 매도 결과
                 for r in cycle.get("sell_results", []):
@@ -944,7 +945,7 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
                         "classify": _classify_trade(action, reason, pnl_rate),
                         "quantity": r.get("quantity", 0), "price": r.get("price", 0),
                         "status": r.get("status", ""), "reason": reason,
-                        "pnl_rate": pnl_rate, "source": source,
+                        "pnl_rate": pnl_rate, "source": source, "mode": cycle_mode,
                     })
 
     result.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
@@ -1528,6 +1529,10 @@ body{padding-bottom:80px}
 .pg-cur{background:#1c4a7a!important;border-color:#58a6ff!important;color:#cae0f9!important;font-weight:700}
 /* 매매일지 분류 배지 */
 .trade-cls{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap}
+/* 매매일지 모드 배지 */
+.trade-mode{display:inline-block;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;white-space:nowrap;vertical-align:middle;margin-left:3px}
+.trade-mode-live{background:#2d2500;color:#d29922;border:1px solid #5a4a00}
+.trade-mode-paper{background:#1e2228;color:#484f58;border:1px solid #30363d}
 /* 프롬프트 버튼 */
 .btn-prompt{background:transparent;border:1px solid #30363d;color:#58a6ff;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-top:6px;width:100%}
 .btn-prompt:hover{background:#1c4a7a;border-color:#58a6ff}
@@ -1968,6 +1973,11 @@ body{padding-bottom:80px}
       <option value="">전체 (국내+해외)</option>
       <option value="kitty">🐱 Kitty (국내)</option>
       <option value="night">🌙 Night (해외)</option>
+    </select>
+    <select id="tr-mode">
+      <option value="">전체 모드</option>
+      <option value="live">Live</option>
+      <option value="paper">Paper</option>
     </select>
     <button class="btn btn-pri" onclick="loadTrades()">조회</button>
   </div>
@@ -2929,6 +2939,7 @@ async function loadTrades(resetPage) {
     const dateVal = document.getElementById('tr-date').value;
     const clsVal  = document.getElementById('tr-cls').value;
     const srcVal  = document.getElementById('tr-src').value;
+    const modeVal = document.getElementById('tr-mode').value;
 
     // Night 모드 전환 pending 중이면 빈 화면
     const nightFiltered = srcVal === 'night' || (_currentView === 'night' && !srcVal);
@@ -2945,9 +2956,10 @@ async function loadTrades(resetPage) {
     let trades = d.trades || [];
 
     // 필터
-    if(dateVal) trades = trades.filter(t => t.date === dateVal);
-    if(clsVal)  trades = trades.filter(t => t.classify === clsVal);
-    if(srcVal)  trades = trades.filter(t => t.source === srcVal);
+    if(dateVal)  trades = trades.filter(t => t.date === dateVal);
+    if(clsVal)   trades = trades.filter(t => t.classify === clsVal);
+    if(srcVal)   trades = trades.filter(t => t.source === srcVal);
+    if(modeVal)  trades = trades.filter(t => (t.mode || 'paper') === modeVal);
 
     _trAllTrades = trades;
 
@@ -3001,10 +3013,13 @@ function renderTradesPage() {
   tbody.innerHTML = slice.map((t, i) => {
     const clsCss = 'trade-cls cls-'+t.classify;
     const srcIcon = t.source==='night' ? '🌙' : '🐱';
+    const tradeMode = t.mode || 'paper';
+    const modeCss = tradeMode === 'live' ? 'trade-mode trade-mode-live' : 'trade-mode trade-mode-paper';
+    const modeLabel = tradeMode === 'live' ? 'L' : 'P';
     return `<tr>
       <td class="ts-col">${srcIcon} ${t.date.slice(5)}<br><span style="color:#484f58">${t.time}</span></td>
       <td><div class="pf-name">${esc(t.name||t.symbol)}</div><div class="pf-sym">${esc(t.symbol)}</div></td>
-      <td><span class="${clsCss}">${t.classify}</span></td>
+      <td><span class="${clsCss}">${t.classify}</span><span class="${modeCss}">${modeLabel}</span></td>
       <td style="text-align:center"><button class="btn-detail" onclick="showTradeDetail(${i})">자세히</button></td>
     </tr>`;
   }).join('');
@@ -3034,9 +3049,10 @@ function goTradePage(p) {
 }
 
 function clearTradeFilter() {
-  document.getElementById('tr-date').value = '';
-  document.getElementById('tr-cls').value  = '';
-  document.getElementById('tr-src').value  = '';
+  document.getElementById('tr-date').value  = '';
+  document.getElementById('tr-cls').value   = '';
+  document.getElementById('tr-src').value   = '';
+  document.getElementById('tr-mode').value  = '';
   loadTrades();
 }
 

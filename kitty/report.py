@@ -16,8 +16,9 @@ RETAIN_DAYS = 30
 class CycleRecord:
     """매매 사이클 1회 기록"""
 
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "paper") -> None:
         self.timestamp: str = datetime.now(_KST).strftime("%H:%M:%S")
+        self.mode: str = mode
         self.market_analysis: dict[str, Any] = {}
         self.stock_evaluation: dict[str, Any] = {}
         self.stock_picks: dict[str, Any] = {}
@@ -28,6 +29,7 @@ class CycleRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "timestamp": self.timestamp,
+            "mode": self.mode,
             "market_analysis": self.market_analysis,
             "stock_evaluation": self.stock_evaluation,
             "stock_picks": self.stock_picks,
@@ -47,9 +49,9 @@ class DailyReport:
         REPORTS_DIR.mkdir(exist_ok=True)
         self._cleanup_old_reports()
 
-    def begin_cycle(self) -> None:
+    def begin_cycle(self, mode: str = "paper") -> None:
         """새 사이클 시작"""
-        self._current = CycleRecord()
+        self._current = CycleRecord(mode=mode)
 
     def record_analysis(self, analysis: dict[str, Any]) -> None:
         """시장분석가 결과 기록"""

@@ -14,8 +14,9 @@ REPORTS_DIR = Path("night-reports")
 class NightCycleRecord:
     """Single trading cycle record"""
 
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "paper") -> None:
         self.timestamp: str = datetime.now(_KST).strftime("%H:%M:%S")
+        self.mode: str = mode
         self.market_analysis: dict[str, Any] = {}
         self.stock_evaluation: dict[str, Any] = {}
         self.stock_picks: dict[str, Any] = {}
@@ -26,6 +27,7 @@ class NightCycleRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "timestamp": self.timestamp,
+            "mode": self.mode,
             "market_analysis": self.market_analysis,
             "stock_evaluation": self.stock_evaluation,
             "stock_picks": self.stock_picks,
@@ -44,8 +46,8 @@ class NightDailyReport:
         self._current: NightCycleRecord | None = None
         REPORTS_DIR.mkdir(exist_ok=True)
 
-    def begin_cycle(self) -> None:
-        self._current = NightCycleRecord()
+    def begin_cycle(self, mode: str = "paper") -> None:
+        self._current = NightCycleRecord(mode=mode)
 
     def record_analysis(self, analysis: dict[str, Any]) -> None:
         if self._current:
