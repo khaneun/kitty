@@ -85,6 +85,8 @@ NIGHT_REPORTS_DIR = Path(os.getenv("NIGHT_REPORTS_DIR",  "/night-reports"))
 NIGHT_PORTFOLIO_SNAPSHOT = NIGHT_LOG_DIR / "night_portfolio_snapshot.json"
 NIGHT_AGENT_CONTEXT      = NIGHT_LOG_DIR / "night_agent_context.json"
 NIGHT_CMD_DIR = Path(os.getenv("NIGHT_CMD_DIR", "/night-commands"))
+NIGHT_MODE_CONFIG = NIGHT_CMD_DIR / "night_mode_config.json"
+KR_MODE_CONFIG    = CMD_DIR / "mode_config.json"
 
 NIGHT_AGENTS = ["NightSectorAnalyst", "NightStockPicker", "NightStockEvaluator",
                 "NightAssetManager", "NightBuyExecutor", "NightSellExecutor"]
@@ -528,15 +530,51 @@ async def api_set_mode(req: Request):
     try:
         CMD_DIR.mkdir(parents=True, exist_ok=True)
         MODE_REQ.write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        KR_MODE_CONFIG.write_text(json.dumps({"mode": mode}), encoding="utf-8")
         return {"ok": True, "mode": mode}
     except Exception as e:
         from fastapi import HTTPException
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/night/mode")
+def api_get_night_mode(req: Request):
+    """Night 현재 설정 모드 반환 — config 파일 우선, 없으면 포트폴리오 스냅샷에서"""
+    _auth(req)
+    if NIGHT_MODE_CONFIG.exists():
+        try:
+            return {"mode": json.loads(NIGHT_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "paper")}
+        except Exception:
+            pass
+    if NIGHT_PORTFOLIO_SNAPSHOT.exists():
+        try:
+            return {"mode": json.loads(NIGHT_PORTFOLIO_SNAPSHOT.read_text(encoding="utf-8")).get("trading_mode", "paper")}
+        except Exception:
+            pass
+    return {"mode": "paper"}
+
+
+@app.get("/api/kitty/mode")
+def api_get_kitty_mode(req: Request):
+    """KR 현재 설정 모드 반환 — config 파일 우선, 없으면 포트폴리오 스냅샷에서"""
+    _auth(req)
+    if KR_MODE_CONFIG.exists():
+        try:
+            return {"mode": json.loads(KR_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "paper")}
+        except Exception:
+            pass
+    pf = LOG_DIR / "portfolio_snapshot.json"
+    if pf.exists():
+        try:
+            return {"mode": json.loads(pf.read_text(encoding="utf-8")).get("trading_mode", "paper")}
+        except Exception:
+            pass
+    return {"mode": "paper"}
+
+
 @app.post("/api/night/set-mode")
 async def api_night_set_mode(req: Request):
-    """Night 모드 전환 요청 — night-commands/night_mode_request.json 에 기록"""
+    """Night 모드 전환 요청 — night_mode_request.json(트레이더 폴링) + night_mode_config.json(영속) 기록"""
     _auth(req)
     body = await req.json()
     mode = body.get("mode", "")
@@ -545,8 +583,8 @@ async def api_night_set_mode(req: Request):
         raise HTTPException(400, "mode must be 'paper' or 'live'")
     try:
         NIGHT_CMD_DIR.mkdir(parents=True, exist_ok=True)
-        night_mode_req = NIGHT_CMD_DIR / "night_mode_request.json"
-        night_mode_req.write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        (NIGHT_CMD_DIR / "night_mode_request.json").write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        NIGHT_MODE_CONFIG.write_text(json.dumps({"mode": mode}), encoding="utf-8")
         return {"ok": True, "mode": mode}
     except Exception as e:
         from fastapi import HTTPException
@@ -1267,8 +1305,21 @@ header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;displ
 /* GNB 셀렉터 */
 .gnb-select{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;outline:none}
 .gnb-select:focus{border-color:#58a6ff}
-.mode-paper{border-color:#3fb950!important;color:#3fb950!important}
-.mode-live{border-color:#f85149!important;color:#f85149!important}
+/* 모드 배지 (헤더 표시 전용 — 읽기 전용) */
+.mode-badge{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.mode-badge.mode-paper{background:#0d2a0d;color:#3fb950;border:1px solid #238636}
+.mode-badge.mode-live{background:#2a0d0d;color:#f85149;border:1px solid #da3633}
+/* 시스템 탭 투자모드 라디오 */
+.sys-mode-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #21262d}
+.sys-mode-row:last-child{border-bottom:none}
+.sys-mode-lbl{font-size:12px;color:#c9d1d9;width:120px;flex-shrink:0}
+.sys-mode-opts{display:flex;gap:6px}
+.mode-radio-lbl{display:inline-flex;align-items:center;cursor:pointer}
+.mode-radio-lbl input[type=radio]{display:none}
+.mode-radio-opt{padding:4px 16px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;border:1px solid #30363d;color:#484f58;transition:all .15s}
+.mode-radio-lbl input:checked+.mode-radio-paper{background:#0d2a0d;color:#3fb950;border-color:#238636}
+.mode-radio-lbl input:checked+.mode-radio-live{background:#2a0d0d;color:#f85149;border-color:#da3633}
+.mode-radio-lbl:hover .mode-radio-opt{color:#8b949e;border-color:#484f58}
 /* 탭 */
 .tabs{display:flex;border-bottom:1px solid #30363d;background:#161b22;position:sticky;top:41px;z-index:99;overflow-x:auto}
 .tab{padding:10px 14px;font-size:12px;color:#8b949e;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0}
@@ -1538,10 +1589,7 @@ body{padding-bottom:80px}
       <button class="view-btn active" id="view-kitty" onclick="switchView('kitty')">Kitty</button>
       <button class="view-btn" id="view-night" onclick="switchView('night')">Night</button>
     </div>
-    <select id="gnb-mode" class="gnb-select" onchange="onModeChange(this.value)" title="매매 모드">
-      <option value="paper">📄 paper</option>
-      <option value="live">🔴 live</option>
-    </select>
+    <span id="gnb-mode-badge" class="mode-badge mode-paper">paper</span>
   </div>
 </header>
 
@@ -1555,7 +1603,7 @@ body{padding-bottom:80px}
   <div class="subtab active" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
   <div class="subtab" id="sub-tab-tokens" onclick="switchAdmin('tokens')">🔢 토큰</div>
   <div class="subtab" id="sub-tab-advisor" onclick="switchAdmin('advisor')">🧠 성향관리</div>
-  <div class="subtab" id="sub-tab-llm" onclick="switchAdmin('llm')">🤖 LLM 관리</div>
+  <div class="subtab" id="sub-tab-system" onclick="switchAdmin('system')">🖥️ 시스템</div>
 </div>
 
 
@@ -1782,10 +1830,32 @@ body{padding-bottom:80px}
 </div>
 
 <!-- ══ LLM 관리 탭 ══ -->
-<div id="tab-llm" class="tab-content">
+<div id="tab-system" class="tab-content">
 <div class="wrap">
 
-  <!-- 현재 적용 모델 -->
+  <!-- 투자 모드 -->
+  <div class="section">
+    <div class="sec-title">투자 모드</div>
+    <div style="padding:4px 0">
+      <div class="sys-mode-row">
+        <span class="sys-mode-lbl">Kitty (KR 주식)</span>
+        <div class="sys-mode-opts">
+          <label class="mode-radio-lbl"><input type="radio" name="sys-mode-kitty" id="sys-mode-kitty-paper" value="paper" onchange="changeSystemMode('kitty','paper')"><span class="mode-radio-opt mode-radio-paper">paper</span></label>
+          <label class="mode-radio-lbl"><input type="radio" name="sys-mode-kitty" id="sys-mode-kitty-live"  value="live"  onchange="changeSystemMode('kitty','live')"><span class="mode-radio-opt mode-radio-live">live</span></label>
+        </div>
+      </div>
+      <div class="sys-mode-row">
+        <span class="sys-mode-lbl">Night (US 주식)</span>
+        <div class="sys-mode-opts">
+          <label class="mode-radio-lbl"><input type="radio" name="sys-mode-night" id="sys-mode-night-paper" value="paper" onchange="changeSystemMode('night','paper')"><span class="mode-radio-opt mode-radio-paper">paper</span></label>
+          <label class="mode-radio-lbl"><input type="radio" name="sys-mode-night" id="sys-mode-night-live"  value="live"  onchange="changeSystemMode('night','live')"><span class="mode-radio-opt mode-radio-live">live</span></label>
+        </div>
+      </div>
+    </div>
+    <div id="sys-mode-msg" style="font-size:11px;color:#8b949e;margin-top:8px;min-height:16px"></div>
+  </div>
+
+  <!-- LLM 관리 -->
   <div class="section">
     <div class="sec-title">현재 적용 모델</div>
     <div id="llm-current-wrap" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
@@ -1850,8 +1920,8 @@ body{padding-bottom:80px}
     <div id="llm-hist-pg" style="display:flex;justify-content:center;gap:4px;margin-top:10px;flex-wrap:wrap"></div>
   </div>
 
-</div>
-</div>
+</div><!-- /wrap -->
+</div><!-- /tab-system -->
 
 <!-- ══ 매매일지 탭 ══ -->
 <div id="tab-trades" class="tab-content">
@@ -1967,6 +2037,9 @@ function switchView(view) {
   document.getElementById('view-night').classList.toggle('active', view==='night');
   document.getElementById('logo-text').textContent = view==='kitty' ? 'Kitty Monitor' : 'Night Monitor';
   document.getElementById('logo-img').style.background = view==='night' ? '#000000' : '#ffffff';
+  // GNB 배지: 현재 뷰의 pending 또는 config 기준으로 즉시 갱신
+  const pendingMode = view === 'night' ? _pendingNightMode : _pendingKittyMode;
+  if(pendingMode) updateGnbBadge(pendingMode);
   // 현재 활성 탭을 그대로 유지하되 내용을 새 view에 맞게 리로드
   const activeMain = ['agents','trades','admin'].find(t =>
     document.getElementById('main-tab-'+t)?.classList.contains('active')
@@ -1987,7 +2060,7 @@ function switchMain(name) {
     if(el) el.classList.toggle('active', t===name);
   });
   document.getElementById('subtabs').style.display = name==='admin' ? 'flex' : 'none';
-  ['errors','tokens','advisor','llm','agents','trades'].forEach(n => {
+  ['errors','tokens','advisor','system','agents','trades'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
   if(name === 'agents') {
@@ -2013,7 +2086,7 @@ function switchMain(name) {
 
 function switchAdmin(name) {
   _adminTab = name;
-  ['errors','tokens','advisor','llm'].forEach(n => {
+  ['errors','tokens','advisor','system'].forEach(n => {
     document.getElementById('sub-tab-'+n).classList.toggle('active', n===name);
     document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
@@ -2024,7 +2097,61 @@ function switchAdmin(name) {
     else loadTokens();
   }
   if(name==='advisor'){ loadAdvisor(); }
-  if(name==='llm'){ loadLlm(); }
+  if(name==='system'){ loadSystem(); }
+}
+
+// ── 시스템 탭 ─────────────────────────────────────────────────────────────────
+async function loadSystem() {
+  await loadSystemModes();
+  await loadLlm();
+}
+
+async function loadSystemModes() {
+  try {
+    const [dn, dk] = await Promise.all([
+      fetch('/api/night/mode').then(r=>r.json()),
+      fetch('/api/kitty/mode').then(r=>r.json()),
+    ]);
+    _setModeRadio('night', dn.mode);
+    _setModeRadio('kitty', dk.mode);
+    // GNB 배지도 현재 뷰 기준으로 갱신
+    const badge = _currentView === 'night' ? dn.mode : dk.mode;
+    updateGnbBadge(badge);
+  } catch(e) { console.error('system-modes', e); }
+}
+
+function _setModeRadio(view, mode) {
+  const r = document.getElementById('sys-mode-'+view+'-'+mode);
+  if(r) r.checked = true;
+}
+
+async function changeSystemMode(view, newMode) {
+  if(newMode === 'live') {
+    if(!confirm('⚠️ 실전 매매 모드로 전환합니다.\n실제 자금으로 거래됩니다. 계속하시겠습니까?')) {
+      _setModeRadio(view, newMode === 'live' ? 'paper' : 'live');
+      return;
+    }
+  }
+  const endpoint = view === 'night' ? '/api/night/set-mode' : '/api/set-mode';
+  const msgEl = document.getElementById('sys-mode-msg');
+  try {
+    const r = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:newMode})});
+    if(r.ok) {
+      if(view === 'night') _pendingNightMode = newMode;
+      else _pendingKittyMode = newMode;
+      if(view === _currentView) updateGnbBadge(newMode);
+      msgEl.style.color = '#3fb950';
+      msgEl.textContent = (view==='night'?'Night':'Kitty') + ' 모드 전환 요청 완료 — 다음 사이클에 적용됩니다';
+    } else {
+      msgEl.style.color = '#f85149';
+      msgEl.textContent = '모드 전환 요청 실패';
+      await loadSystemModes();
+    }
+  } catch(e) {
+    msgEl.style.color = '#f85149';
+    msgEl.textContent = '오류: ' + e;
+    await loadSystemModes();
+  }
 }
 
 // ── LLM 관리 ──────────────────────────────────────────────────────────────────
@@ -2342,55 +2469,23 @@ function clearFilter(){
   loadErrors();
 }
 
-// ── GNB 모드 셀렉터 ─────────────────────────────────────
-// 전환 요청 후 스냅샷이 반영되기 전까지 셀렉터가 롤백되는 것을 방지
+// ── GNB 모드 배지 (읽기 전용 표시) ──────────────────────
 let _pendingKittyMode = null;
 let _pendingNightMode = null;
+
+function updateGnbBadge(mode) {
+  const badge = document.getElementById('gnb-mode-badge');
+  if(!badge) return;
+  badge.textContent = mode;
+  badge.className = 'mode-badge mode-' + mode;
+}
 
 function _syncGnbMode(snapshotMode, view) {
   const pending = view === 'night' ? _pendingNightMode : _pendingKittyMode;
   if(pending && snapshotMode !== pending) return; // 아직 전환 중 — 덮어쓰지 않음
   if(view === 'night') _pendingNightMode = null;
   else _pendingKittyMode = null;
-  const sel = document.getElementById('gnb-mode');
-  sel.value = snapshotMode;
-  sel.dataset.current = snapshotMode;
-  updateModeStyle(sel, snapshotMode);
-}
-
-async function onModeChange(newMode) {
-  const sel = document.getElementById('gnb-mode');
-  if(newMode === 'live') {
-    if(!confirm('⚠️ 실전 매매 모드로 전환합니다.\n실제 자금으로 거래됩니다. 계속하시겠습니까?')) {
-      // 취소 시 원래 값 복원
-      sel.value = sel.dataset.current || 'paper';
-      return;
-    }
-  }
-  try {
-    const endpoint = _currentView === 'night' ? '/api/night/set-mode' : '/api/set-mode';
-    const r = await fetch(endpoint, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({mode: newMode})
-    });
-    if(r.ok) {
-      sel.dataset.current = newMode;
-      updateModeStyle(sel, newMode);
-      if(_currentView === 'night') _pendingNightMode = newMode;
-      else _pendingKittyMode = newMode;
-    } else {
-      alert('모드 전환 요청 실패');
-      sel.value = sel.dataset.current || 'paper';
-    }
-  } catch(e) {
-    alert('오류: '+e);
-    sel.value = sel.dataset.current || 'paper';
-  }
-}
-
-function updateModeStyle(sel, mode) {
-  sel.className = 'gnb-select ' + (mode==='live'?'mode-live':'mode-paper');
+  if(view === _currentView) updateGnbBadge(snapshotMode);
 }
 
 // ── 투자 성향 카드 ───────────────────────────────────────
@@ -3250,6 +3345,17 @@ function onAdvKey(e) {
 switchMain('agents');
 
 // 60초 자동 갱신
+// 페이지 첫 로드 시 GNB 배지 초기화
+(async()=>{
+  try {
+    const [dn, dk] = await Promise.all([
+      fetch('/api/night/mode').then(r=>r.json()),
+      fetch('/api/kitty/mode').then(r=>r.json()),
+    ]);
+    updateGnbBadge(_currentView === 'night' ? dn.mode : dk.mode);
+  } catch(e) {}
+})();
+
 setInterval(()=>{
   if(document.getElementById('tab-agents').classList.contains('active')){
     if(_currentView === 'night'){ loadNightPortfolio(); loadNightAgentScores(); }
