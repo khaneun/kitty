@@ -1112,7 +1112,7 @@ table.pf tr:last-child td{border-bottom:none}
 .pf-popup-lbl{color:#8b949e}
 .pf-popup-val{color:#c9d1d9;font-weight:600}
 table.pf tr:hover td{background:#161b22}
-.pf-name{font-weight:600;color:#f0f6fc;font-size:12px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf-name{font-weight:600;color:#f0f6fc;font-size:12px;max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pf-sym{font-size:10px;color:#8b949e}
 /* 히트맵 */
 .heatmap-wrap{overflow-x:auto;border-radius:8px;border:1px solid #30363d}
@@ -1269,7 +1269,7 @@ body{padding-bottom:80px}
 .tr-bar-cnt{font-weight:700;color:#c9d1d9;margin-left:1px}
 /* 매매일지 컬럼 너비 */
 #tr-table th:nth-child(1),#tr-table td:nth-child(1){width:62px}
-#tr-table th:nth-child(2),#tr-table td:nth-child(2){max-width:120px}
+#tr-table th:nth-child(2),#tr-table td:nth-child(2){width:80px;max-width:80px}
 #tr-table th:nth-child(3),#tr-table td:nth-child(3){width:64px}
 #tr-table th:nth-child(4),#tr-table td:nth-child(4){width:48px;text-align:center}
 /* 에러 로그 컬럼 너비 */
