@@ -2834,6 +2834,18 @@ async function loadTrades(resetPage) {
     const dateVal = document.getElementById('tr-date').value;
     const clsVal  = document.getElementById('tr-cls').value;
     const srcVal  = document.getElementById('tr-src').value;
+
+    // Night 모드 전환 pending 중이면 빈 화면
+    const nightFiltered = srcVal === 'night' || (_currentView === 'night' && !srcVal);
+    if(_pendingNightMode && nightFiltered) {
+      ['tr-total-cnt','tr-buy-cnt','tr-sell-cnt','tr-profit-cnt','tr-loss-cnt','tr-other-cnt']
+        .forEach(id => document.getElementById(id).textContent = '-');
+      document.getElementById('tr-tbody').innerHTML =
+        '<tr><td colspan="7" class="empty">⏳ ' + _pendingNightMode + ' 모드 전환 중 — 다음 사이클 후 갱신됩니다</td></tr>';
+      document.getElementById('tr-pagination').innerHTML = '';
+      return;
+    }
+
     const d = await fetch('/api/trades?days=30').then(r=>r.json());
     let trades = d.trades || [];
 
@@ -2992,6 +3004,17 @@ async function loadNightPortfolio() {
 
     // GNB 셀렉터 동기화 (Night 뷰일 때 + 전환 요청 pending 중이면 스킵)
     if(d.trading_mode && _currentView === 'night') _syncGnbMode(d.trading_mode, 'night');
+
+    // 모드 전환 pending 중 — 구 모드 데이터 숨김
+    if(_pendingNightMode && d.trading_mode && d.trading_mode !== _pendingNightMode) {
+      document.getElementById('nt-total-eval').textContent = '-';
+      document.getElementById('nt-total-pnl').textContent = '-';
+      document.getElementById('nt-cash-val').textContent = '-';
+      document.getElementById('nt-pf-ts').textContent = '';
+      document.getElementById('nt-pf-tbody').innerHTML =
+        '<tr><td colspan="5" class="empty">⏳ ' + _pendingNightMode + ' 모드 전환 중 — 다음 사이클 후 갱신됩니다</td></tr>';
+      return;
+    }
 
     document.getElementById('nt-total-eval').textContent = d.total_eval ? fmtUSD(d.total_eval) : '-';
     const pnlEl = document.getElementById('nt-total-pnl');
