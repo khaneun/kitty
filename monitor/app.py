@@ -47,6 +47,35 @@ BURST_THRESH  = 3
 
 AGENTS = ["섹터분석가", "종목발굴가", "종목평가가", "자산운용가", "매수실행가", "매도실행가"]
 
+LLM_MODELS: dict = {
+    "openai": {
+        "label": "OpenAI",
+        "models": [
+            "gpt-4o", "gpt-4o-mini",
+            "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+            "o3", "o3-mini", "o4-mini",
+        ],
+    },
+    "anthropic": {
+        "label": "Anthropic",
+        "models": [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ],
+    },
+    "google": {
+        "label": "Google",
+        "models": [
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-pro",
+        ],
+    },
+}
+
 # ── Night 모드 환경변수 ──────────────────────────────────────────────────────
 NIGHT_LOG_DIR     = Path(os.getenv("NIGHT_LOG_DIR",     "/night-logs"))
 NIGHT_FEEDBACK_DIR = Path(os.getenv("NIGHT_FEEDBACK_DIR", "/night-feedback"))
@@ -134,6 +163,14 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS file_pos (
                 filename TEXT PRIMARY KEY,
                 position INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS llm_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts            TEXT NOT NULL,
+                provider      TEXT NOT NULL,
+                model         TEXT NOT NULL,
+                total_return  REAL,
+                agent_scores  TEXT
             );
         """)
 
@@ -805,6 +842,115 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
     return {"total": len(result), "trades": result}
 
 
+# ── LLM 관리 ──────────────────────────────────────────────────────────────────
+
+def _llm_current() -> tuple[str, str]:
+    """현재 provider, model (SQLite 최신 → 환경변수 순)"""
+    try:
+        with _db() as c:
+            row = c.execute("SELECT provider, model FROM llm_history ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            return row[0], row[1]
+    except Exception:
+        pass
+    return os.getenv("AI_PROVIDER", "openai"), os.getenv("AI_MODEL", "gpt-4o")
+
+
+def _calc_return_since(since_date: str) -> Optional[float]:
+    """since_date 이후 매도 거래의 pnl_rate 합계"""
+    total = 0.0
+    count = 0
+    for rdir in [REPORTS_DIR, NIGHT_REPORTS_DIR]:
+        if not rdir.exists():
+            continue
+        for path in sorted(rdir.glob("*.json"), reverse=True):
+            if path.stem < since_date:
+                break
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for cycle in data.get("cycles", []):
+                pnl_map: dict = {}
+                for ev in cycle.get("stock_evaluation", {}).get("evaluations", []):
+                    s = ev.get("symbol", "")
+                    if s:
+                        pnl_map[s] = ev.get("pnl_rate")
+                for r in cycle.get("sell_results", []):
+                    pnl = pnl_map.get(r.get("symbol", ""))
+                    if pnl is not None:
+                        total += float(pnl)
+                        count += 1
+    return round(total, 2) if count > 0 else None
+
+
+def _calc_avg_scores_5d() -> dict:
+    """에이전트별 최근 5일 평균 점수"""
+    result: dict = {}
+    cutoff = (_now() - timedelta(days=5)).strftime("%Y-%m-%d")
+    for fb_dir, agents in [(FEEDBACK_DIR, AGENTS), (NIGHT_FEEDBACK_DIR, NIGHT_AGENTS)]:
+        for agent in agents:
+            safe = agent.replace("/", "_").replace(" ", "_")
+            path = fb_dir / f"{safe}.json"
+            if not path.exists():
+                continue
+            try:
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                recent = [e for e in entries if e.get("date", "") >= cutoff]
+                if recent:
+                    result[agent] = round(sum(e.get("score", 0) for e in recent) / len(recent), 1)
+            except Exception:
+                pass
+    return result
+
+
+@app.get("/api/llm/config")
+def api_llm_config(req: Request):
+    _auth(req)
+    provider, model = _llm_current()
+    return {"current": {"provider": provider, "model": model}, "models": LLM_MODELS}
+
+
+@app.post("/api/llm/apply")
+async def api_llm_apply(req: Request):
+    _auth(req)
+    body = await req.json()
+    provider = body.get("provider", "openai")
+    model    = body.get("model", "gpt-4o")
+    ts       = _now().strftime("%Y-%m-%d %H:%M:%S")
+    since    = body.get("since", "2000-01-01")
+    total_return  = _calc_return_since(since)
+    agent_scores  = _calc_avg_scores_5d()
+    with _db() as c:
+        c.execute(
+            "INSERT INTO llm_history (ts, provider, model, total_return, agent_scores) VALUES (?,?,?,?,?)",
+            (ts, provider, model, total_return, json.dumps(agent_scores, ensure_ascii=False)),
+        )
+    return {"ok": True}
+
+
+@app.get("/api/llm/history")
+def api_llm_history(req: Request, page: int = Query(1, ge=1)):
+    _auth(req)
+    PAGE = 10
+    with _db() as c:
+        total = c.execute("SELECT COUNT(*) FROM llm_history").fetchone()[0]
+        rows  = c.execute(
+            "SELECT id,ts,provider,model,total_return,agent_scores FROM llm_history ORDER BY id DESC LIMIT ? OFFSET ?",
+            (PAGE, (page - 1) * PAGE),
+        ).fetchall()
+    result = []
+    for r in rows:
+        try:
+            scores = json.loads(r[5]) if r[5] else {}
+        except Exception:
+            scores = {}
+        result.append({"id": r[0], "ts": r[1], "provider": r[2], "model": r[3],
+                        "total_return": r[4], "agent_scores": scores})
+    import math as _math
+    return {"total": total, "page": page, "pages": max(1, _math.ceil(total / PAGE)), "rows": result}
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(req: Request):
     _auth(req)
@@ -1255,6 +1401,22 @@ body{padding-bottom:80px}
 .cls-익절{background:#3d1010;color:#f85149}.cls-손절{background:#0d1a3d;color:#4493f8}
 .cls-신규매수{background:#0d2d3d;color:#58a6ff}.cls-추가매수{background:#142814;color:#57ab5a}
 .cls-종목교체{background:#2d2500;color:#d29922}.cls-매도{background:#21262d;color:#8b949e}
+/* LLM 관리 */
+.llm-provider-block{border:1px solid #30363d;border-radius:8px;overflow:hidden}
+.llm-provider-header{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;background:#161b22;user-select:none}
+.llm-provider-header:hover{background:#1c2128}
+.llm-provider-name{font-weight:700;color:#f0f6fc;font-size:13px;flex:1}
+.llm-provider-badge{background:#1a4a1a;color:#3fb950;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:700}
+.llm-chevron{color:#484f58;font-size:11px;transition:transform .2s}
+.llm-chevron.open{transform:rotate(90deg)}
+.llm-model-list{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px;background:#0d1117;border-top:1px solid #30363d}
+.llm-model-btn{border:1px solid #30363d;background:transparent;color:#8b949e;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;white-space:nowrap;transition:all .15s}
+.llm-model-btn:hover{border-color:#58a6ff;color:#58a6ff}
+.llm-model-btn.active-model{border-color:#3fb950;color:#3fb950;background:#142814;font-weight:700}
+.llm-model-btn.selected{border-color:#58a6ff;color:#58a6ff;background:#0d2d3d}
+.llm-in-use{display:inline-block;background:#3fb950;color:#000;border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;vertical-align:middle}
+.llm-score-chip{display:inline-flex;align-items:center;gap:4px;background:#21262d;border-radius:5px;padding:3px 8px;font-size:11px;color:#c9d1d9}
+.llm-score-val{font-weight:700;color:#58a6ff}
 /* 매매일지 가로바 */
 .tr-bar-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:12px}
 .tr-bar-total{font-size:12px;color:#8b949e;margin-bottom:8px}
@@ -1309,6 +1471,7 @@ body{padding-bottom:80px}
   <div class="subtab active" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
   <div class="subtab" id="sub-tab-tokens" onclick="switchAdmin('tokens')">🔢 토큰</div>
   <div class="subtab" id="sub-tab-advisor" onclick="switchAdmin('advisor')">🧠 성향관리</div>
+  <div class="subtab" id="sub-tab-llm" onclick="switchAdmin('llm')">🤖 LLM 관리</div>
 </div>
 
 
@@ -1534,6 +1697,78 @@ body{padding-bottom:80px}
 </div>
 </div>
 
+<!-- ══ LLM 관리 탭 ══ -->
+<div id="tab-llm" class="tab-content">
+<div class="wrap">
+
+  <!-- 현재 적용 모델 -->
+  <div class="section">
+    <div class="sec-title">현재 적용 모델</div>
+    <div id="llm-current-wrap" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <!-- 성능 요약 -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div class="card" style="flex:1;min-width:130px">
+        <div class="lbl">누적 수익률 (매도합계)</div>
+        <div class="num" id="llm-total-return">-</div>
+      </div>
+      <div class="card" style="flex:2;min-width:200px">
+        <div class="lbl" style="margin-bottom:6px">에이전트 최근 5일 평균 점수</div>
+        <div id="llm-agent-scores" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 모델 선택 -->
+  <div class="section">
+    <div class="sec-title">모델 변경</div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <!-- OpenAI -->
+      <div class="llm-provider-block" id="llm-block-openai">
+        <div class="llm-provider-header" onclick="toggleLlmProvider('openai')">
+          <span class="llm-provider-name">OpenAI</span>
+          <span class="llm-provider-badge" id="llm-badge-openai" style="display:none">사용중</span>
+          <span class="llm-chevron" id="llm-chev-openai">▸</span>
+        </div>
+        <div class="llm-model-list" id="llm-models-openai" style="display:none"></div>
+      </div>
+      <!-- Anthropic -->
+      <div class="llm-provider-block" id="llm-block-anthropic">
+        <div class="llm-provider-header" onclick="toggleLlmProvider('anthropic')">
+          <span class="llm-provider-name">Anthropic</span>
+          <span class="llm-provider-badge" id="llm-badge-anthropic" style="display:none">사용중</span>
+          <span class="llm-chevron" id="llm-chev-anthropic">▸</span>
+        </div>
+        <div class="llm-model-list" id="llm-models-anthropic" style="display:none"></div>
+      </div>
+      <!-- Google -->
+      <div class="llm-provider-block" id="llm-block-google">
+        <div class="llm-provider-header" onclick="toggleLlmProvider('google')">
+          <span class="llm-provider-name">Google</span>
+          <span class="llm-provider-badge" id="llm-badge-google" style="display:none">사용중</span>
+          <span class="llm-chevron" id="llm-chev-google">▸</span>
+        </div>
+        <div class="llm-model-list" id="llm-models-google" style="display:none"></div>
+      </div>
+    </div>
+    <button class="btn btn-pri" id="llm-apply-btn" onclick="applyLlm()" style="margin-top:14px;width:100%" disabled>변경 적용</button>
+    <div id="llm-apply-msg" style="font-size:11px;color:#8b949e;margin-top:6px;text-align:center"></div>
+  </div>
+
+  <!-- 변경 이력 -->
+  <div class="section">
+    <div class="sec-title">변경 이력</div>
+    <div class="tbl-wrap">
+      <table class="log" style="min-width:360px">
+        <thead><tr><th>일시</th><th>프로바이더</th><th>모델</th><th>수익률합</th><th>에이전트 점수</th></tr></thead>
+        <tbody id="llm-hist-tbody"></tbody>
+      </table>
+    </div>
+    <div id="llm-hist-pg" style="display:flex;justify-content:center;gap:4px;margin-top:10px;flex-wrap:wrap"></div>
+  </div>
+
+</div>
+</div>
+
 <!-- ══ 매매일지 탭 ══ -->
 <div id="tab-trades" class="tab-content">
 <div class="wrap">
@@ -1695,7 +1930,7 @@ function switchMain(name) {
 
 function switchAdmin(name) {
   _adminTab = name;
-  ['errors','tokens','advisor'].forEach(n => {
+  ['errors','tokens','advisor','llm'].forEach(n => {
     document.getElementById('sub-tab-'+n).classList.toggle('active', n===name);
     document.getElementById('tab-'+n).classList.toggle('active', n===name);
   });
@@ -1706,6 +1941,190 @@ function switchAdmin(name) {
     else loadTokens();
   }
   if(name==='advisor'){ loadAdvisor(); }
+  if(name==='llm'){ loadLlm(); }
+}
+
+// ── LLM 관리 ──────────────────────────────────────────────────────────────────
+let _llmConfig = null;   // { current: {provider, model}, models: {...} }
+let _llmSel    = null;   // { provider, model } 선택 중
+let _llmAppliedDate = '2000-01-01';
+let _llmHistPage = 1;
+
+async function loadLlm() {
+  try {
+    _llmConfig = await fetch('/api/llm/config').then(r=>r.json());
+  } catch(e){ return; }
+  const cur = _llmConfig.current;
+  _llmSel = {...cur};
+
+  // 현재 모델 표시
+  const cw = document.getElementById('llm-current-wrap');
+  cw.innerHTML = `
+    <div class="card" style="flex:0 0 auto">
+      <div class="lbl">프로바이더</div>
+      <div style="font-size:14px;font-weight:700;color:#58a6ff;margin-top:4px">${esc(_llmConfig.models[cur.provider]?.label||cur.provider)}</div>
+    </div>
+    <div class="card" style="flex:1">
+      <div class="lbl">모델</div>
+      <div style="font-size:13px;font-weight:700;color:#3fb950;margin-top:4px">${esc(cur.model)}<span class="llm-in-use">사용중</span></div>
+    </div>`;
+
+  // 프로바이더별 배지 + 모델 버튼 렌더
+  for(const [prov, info] of Object.entries(_llmConfig.models)) {
+    const badge = document.getElementById('llm-badge-'+prov);
+    if(badge) badge.style.display = cur.provider===prov ? 'inline' : 'none';
+    const list = document.getElementById('llm-models-'+prov);
+    if(!list) continue;
+    list.innerHTML = info.models.map(m => {
+      const isActive = cur.provider===prov && cur.model===m;
+      const isSel    = _llmSel.provider===prov && _llmSel.model===m;
+      const cls = isActive?'llm-model-btn active-model':isSel?'llm-model-btn selected':'llm-model-btn';
+      return `<button class="${cls}" onclick="selectLlmModel('${esc(prov)}','${esc(m)}')">${esc(m)}${isActive?'<span class="llm-in-use">사용중</span>':''}</button>`;
+    }).join('');
+    // 사용중 프로바이더 열기
+    if(cur.provider===prov) openLlmProvider(prov);
+  }
+
+  // 적용된 날짜 (이력 첫 레코드가 없으면 30일 전)
+  await loadLlmHistory(1, true);
+  await refreshLlmStats();
+}
+
+function selectLlmModel(prov, model) {
+  _llmSel = {provider: prov, model};
+  // 버튼 상태 갱신
+  for(const [p, info] of Object.entries(_llmConfig.models)) {
+    const list = document.getElementById('llm-models-'+p);
+    if(!list) continue;
+    list.querySelectorAll('.llm-model-btn').forEach((btn, i) => {
+      const m = info.models[i];
+      const isActive = _llmConfig.current.provider===p && _llmConfig.current.model===m;
+      const isSel    = prov===p && model===m;
+      btn.className = isActive?'llm-model-btn active-model':isSel?'llm-model-btn selected':'llm-model-btn';
+    });
+  }
+  const changed = prov!==_llmConfig.current.provider || model!==_llmConfig.current.model;
+  document.getElementById('llm-apply-btn').disabled = !changed;
+  document.getElementById('llm-apply-msg').textContent = changed
+    ? `${_llmConfig.models[prov]?.label||prov} / ${model} 로 변경 예정`
+    : '';
+}
+
+function toggleLlmProvider(prov) {
+  const list = document.getElementById('llm-models-'+prov);
+  const chev = document.getElementById('llm-chev-'+prov);
+  if(!list) return;
+  const open = list.style.display !== 'none';
+  list.style.display = open ? 'none' : 'flex';
+  if(chev) chev.classList.toggle('open', !open);
+}
+
+function openLlmProvider(prov) {
+  const list = document.getElementById('llm-models-'+prov);
+  const chev = document.getElementById('llm-chev-'+prov);
+  if(list) list.style.display = 'flex';
+  if(chev) chev.classList.add('open');
+}
+
+async function applyLlm() {
+  const btn = document.getElementById('llm-apply-btn');
+  btn.disabled = true;
+  btn.textContent = '적용 중...';
+  try {
+    const res = await fetch('/api/llm/apply', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({provider:_llmSel.provider, model:_llmSel.model, since:_llmAppliedDate})
+    }).then(r=>r.json());
+    if(res.ok) {
+      document.getElementById('llm-apply-msg').textContent = '✅ 적용 완료';
+      await loadLlm();
+    }
+  } catch(e) {
+    document.getElementById('llm-apply-msg').textContent = '❌ 오류 발생';
+    btn.disabled = false;
+  }
+  btn.textContent = '변경 적용';
+}
+
+async function refreshLlmStats() {
+  // 현재 모델 적용일 이후 누적 수익률 + 에이전트 점수 조회
+  try {
+    // 이력에서 현재 모델 적용 날짜 찾기
+    const h = await fetch('/api/llm/history?page=1').then(r=>r.json());
+    const cur = _llmConfig?.current;
+    // 현재 모델의 적용 시점 row
+    let sinceDate = '2000-01-01';
+    if(cur && h.rows) {
+      const row = h.rows.find(r => r.provider===cur.provider && r.model===cur.model);
+      if(row) sinceDate = row.ts.slice(0,10);
+    }
+    _llmAppliedDate = sinceDate;
+    // 수익률: /api/trades 에서 sinceDate 이후 매도 합계
+    const td = await fetch('/api/trades?days=90').then(r=>r.json());
+    const sells = (td.trades||[]).filter(t => t.side==='매도' && t.date >= sinceDate && t.pnl_rate!=null);
+    const totalRet = sells.reduce((s,t)=>s+t.pnl_rate, 0);
+    const retEl = document.getElementById('llm-total-return');
+    if(sells.length>0){
+      const sign = totalRet>=0?'+':'';
+      retEl.textContent = sign+totalRet.toFixed(2)+'%';
+      retEl.style.color = totalRet>=0?'#f85149':'#4493f8';
+    } else {
+      retEl.textContent = '-'; retEl.style.color = '';
+    }
+    // 에이전트 점수: feedback에서 최근 5일
+    const sc = await fetch('/api/agent-scores').then(r=>r.json());
+    const scEl = document.getElementById('llm-agent-scores');
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-5);
+    const cutStr = cutoff.toISOString().slice(0,10);
+    const chips = [];
+    for(const [agent, entries] of Object.entries(sc)){
+      const recent = entries.filter(e=>e.date>=cutStr);
+      if(!recent.length) continue;
+      const avg = (recent.reduce((s,e)=>s+e.score,0)/recent.length).toFixed(1);
+      chips.push(`<div class="llm-score-chip"><span style="color:#8b949e;font-size:10px">${esc(agent)}</span><span class="llm-score-val">${avg}</span></div>`);
+    }
+    scEl.innerHTML = chips.length ? chips.join('') : '<span style="color:#484f58;font-size:12px">데이터 없음</span>';
+  } catch(e){ console.error('llm stats', e); }
+}
+
+async function loadLlmHistory(page, init) {
+  page = page||1; _llmHistPage = page;
+  try {
+    const d = await fetch('/api/llm/history?page='+page).then(r=>r.json());
+    const tbody = document.getElementById('llm-hist-tbody');
+    if(!d.rows.length){
+      tbody.innerHTML='<tr><td colspan="5" class="empty">이력 없음</td></tr>';
+      document.getElementById('llm-hist-pg').innerHTML=''; return;
+    }
+    tbody.innerHTML = d.rows.map(r=>{
+      const sc = r.agent_scores||{};
+      const scStr = Object.entries(sc).map(([a,v])=>`${a.slice(0,3)}:${v}`).join(' ');
+      const ret = r.total_return!=null ? (r.total_return>=0?'+':'')+r.total_return.toFixed(2)+'%' : '-';
+      const retColor = r.total_return==null?'#8b949e':r.total_return>=0?'#f85149':'#4493f8';
+      return `<tr>
+        <td class="ts-col">${r.ts.slice(5,16)}</td>
+        <td style="color:#58a6ff">${esc(r.provider)}</td>
+        <td style="font-size:11px">${esc(r.model)}</td>
+        <td style="color:${retColor};font-weight:700">${ret}</td>
+        <td style="font-size:10px;color:#8b949e">${esc(scStr)||'-'}</td>
+      </tr>`;
+    }).join('');
+    // 페이지네이션
+    const pg = document.getElementById('llm-hist-pg');
+    if(d.pages<=1){ pg.innerHTML=''; return; }
+    let html='';
+    for(let i=1;i<=d.pages;i++){
+      html+=`<button class="pg-btn${i===page?' active':''}" onclick="loadLlmHistory(${i})">${i}</button>`;
+    }
+    pg.innerHTML=html;
+    // 초기화 시 현재 모델 적용일 추출
+    if(init && _llmConfig){
+      const cur=_llmConfig.current;
+      const row=d.rows.find(r=>r.provider===cur.provider&&r.model===cur.model);
+      if(row) _llmAppliedDate=row.ts.slice(0,10);
+    }
+  } catch(e){ console.error('llm hist',e); }
 }
 
 // ── 채팅 팝업 ────────────────────────────────────────────
