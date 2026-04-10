@@ -2,6 +2,59 @@
 
 ---
 
+## v2.4.0 — 2026-04-11
+
+### 매매일지 Live/Paper 분리 + Agent 관리 탭
+
+#### 매매일지 자동 모드 필터 (`monitor/app.py`)
+
+- GNB 뷰(🐱 Kitty / 🌙 Night) + 현재 투자 모드(Paper/Live)에 따라 매매일지 자동 필터링
+- 별도 드롭다운 없이 헤더에 현재 뷰·모드 표시 ("🌙 Night · Live 전체 거래 N건")
+- 각 거래 행에 `L` (Live, 금색) / `P` (Paper, 회색) 배지 표시
+- 거래 리포트 JSON에 `mode` 필드 추가 — 사이클마다 실제 거래 모드 기록
+
+#### 관리 탭 이름 변경
+
+- `🧠 성향관리` → `🤖 Agent 관리`
+
+---
+
+## v2.3.0 — 2026-04-11
+
+### Live 모드 안전 전환 + 모드 영속화
+
+#### KIS 해외주식 주문 오류 수정 (`kitty_night/broker/kis_overseas.py`)
+
+- **`주문구분 입력오류` 버그 수정**: 미국 주식 매수(`TTTT1002U`)에서 `ORD_DVSN="01"`(시장가)이 전달되던 문제 수정
+  - KIS 해외 매수 API는 `"00"` (지정가), `"32"` (LOO), `"34"` (LOC)만 허용; `"01"` 미지원
+  - `price=0` 전달 시 paper/live 구분 없이 `_paper_aggressive_price()`로 지정가 변환 후 `ord_dvsn="00"` 고정
+- `reset_token()` 메서드 추가 — 모드 전환 시 캐시된 토큰·시세 강제 만료
+
+#### 투자 모드 런타임 전환 + 재시작 영속화 (`kitty_night/main.py`)
+
+- `night-commands/night_mode_request.json` 폴링으로 런타임 중 Paper ↔ Live 전환
+- `night-commands/night_mode_config.json` 읽기 — 컨테이너 재시작 후에도 마지막 모드 자동 복원
+- Live 모드 기동 시 30초 카운트다운 + Telegram 경고
+
+#### 모니터 UI 개선 (`monitor/app.py`)
+
+- **GNB 모드 셀렉트 → 읽기 전용 배지**: Paper/Live 토글이 GNB에서 제거됨
+- **관리 > 시스템 탭 신설**: 투자 모드 변경(KR·Night 각각 라디오) + LLM 관리 통합
+- 모드 전환 Pending 중 포트폴리오·매매일지에 플레이스홀더 표시
+- `GET /api/night/mode`, `GET /api/kitty/mode` 엔드포인트 추가 (config 파일 우선)
+- `POST /api/night/set-mode`, `POST /api/set-mode` — config 파일 영속 저장 추가
+
+#### Telegram 화이트리스트 (`kitty/telegram/bot.py`, `kitty_night/telegram/bot.py`)
+
+- `_ALLOWED_USER_IDS` 화이트리스트 추가 — chat ID와 **user ID 동시 검증**
+- 허가되지 않은 user ID는 `⛔ 권한 없음` 응답 후 차단
+
+#### 배포 스크립트 (`start.sh`)
+
+- `NIGHT_TRADING_MODE` Secrets Manager에서 읽어 `.env.night`에 반영 (재배포 후 모드 초기화 방지)
+
+---
+
 ## v2.2.0 — 2026-04-09
 
 ### 손실 최소화 전략 강화 — 익절 확대 + 다층 손절 시스템

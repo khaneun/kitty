@@ -1607,7 +1607,7 @@ body{padding-bottom:80px}
 <div class="subtabs" id="subtabs" style="display:none">
   <div class="subtab active" id="sub-tab-errors" onclick="switchAdmin('errors')">📋 에러</div>
   <div class="subtab" id="sub-tab-tokens" onclick="switchAdmin('tokens')">🔢 토큰</div>
-  <div class="subtab" id="sub-tab-advisor" onclick="switchAdmin('advisor')">🧠 성향관리</div>
+  <div class="subtab" id="sub-tab-advisor" onclick="switchAdmin('advisor')">🤖 Agent 관리</div>
   <div class="subtab" id="sub-tab-system" onclick="switchAdmin('system')">🖥️ 시스템</div>
 </div>
 
@@ -1969,16 +1969,6 @@ body{padding-bottom:80px}
       <option value="종목교체">종목교체</option>
       <option value="매도">매도</option>
     </select>
-    <select id="tr-src">
-      <option value="">전체 (국내+해외)</option>
-      <option value="kitty">🐱 Kitty (국내)</option>
-      <option value="night">🌙 Night (해외)</option>
-    </select>
-    <select id="tr-mode">
-      <option value="">전체 모드</option>
-      <option value="live">Live</option>
-      <option value="paper">Paper</option>
-    </select>
     <button class="btn btn-pri" onclick="loadTrades()">조회</button>
   </div>
   <div class="meta" id="tr-meta"></div>
@@ -2086,8 +2076,6 @@ function switchMain(name) {
     }
   } else if(name === 'trades') {
     document.getElementById('tab-trades').classList.add('active');
-    // view에 따라 소스 자동 필터 (수동으로 바꿀 수도 있음)
-    document.getElementById('tr-src').value = _currentView === 'night' ? 'night' : 'kitty';
     loadTrades();
   } else {
     switchAdmin(_adminTab);
@@ -2122,6 +2110,8 @@ async function loadSystemModes() {
       fetch('/api/night/mode').then(r=>r.json()),
       fetch('/api/kitty/mode').then(r=>r.json()),
     ]);
+    _nightMode = dn.mode;
+    _kittyMode = dk.mode;
     _setModeRadio('night', dn.mode);
     _setModeRadio('kitty', dk.mode);
     // GNB 배지도 현재 뷰 기준으로 갱신
@@ -2147,8 +2137,8 @@ async function changeSystemMode(view, newMode) {
   try {
     const r = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:newMode})});
     if(r.ok) {
-      if(view === 'night') _pendingNightMode = newMode;
-      else _pendingKittyMode = newMode;
+      if(view === 'night') { _pendingNightMode = newMode; _nightMode = newMode; }
+      else { _pendingKittyMode = newMode; _kittyMode = newMode; }
       if(view === _currentView) updateGnbBadge(newMode);
       msgEl.style.color = '#3fb950';
       msgEl.textContent = (view==='night'?'Night':'Kitty') + ' 모드 전환 요청 완료 — 다음 사이클에 적용됩니다';
@@ -2482,6 +2472,8 @@ function clearFilter(){
 // ── GNB 모드 배지 (읽기 전용 표시) ──────────────────────
 let _pendingKittyMode = null;
 let _pendingNightMode = null;
+let _kittyMode = 'paper';
+let _nightMode = 'paper';
 
 function updateGnbBadge(mode) {
   const badge = document.getElementById('gnb-mode-badge');
@@ -2936,18 +2928,18 @@ let _trPage = 1;
 async function loadTrades(resetPage) {
   if(resetPage !== false) _trPage = 1;
   try {
-    const dateVal = document.getElementById('tr-date').value;
-    const clsVal  = document.getElementById('tr-cls').value;
-    const srcVal  = document.getElementById('tr-src').value;
-    const modeVal = document.getElementById('tr-mode').value;
+    const dateVal  = document.getElementById('tr-date').value;
+    const clsVal   = document.getElementById('tr-cls').value;
+    const viewSrc  = _currentView === 'night' ? 'night' : 'kitty';
+    const viewMode = _currentView === 'night' ? _nightMode : _kittyMode;
 
-    // Night 모드 전환 pending 중이면 빈 화면
-    const nightFiltered = srcVal === 'night' || (_currentView === 'night' && !srcVal);
-    if(_pendingNightMode && nightFiltered) {
+    // 모드 전환 pending 중이면 빈 화면
+    const pending = _currentView === 'night' ? _pendingNightMode : _pendingKittyMode;
+    if(pending) {
       ['tr-total-cnt','tr-buy-cnt','tr-sell-cnt','tr-profit-cnt','tr-loss-cnt','tr-other-cnt']
         .forEach(id => document.getElementById(id).textContent = '-');
       document.getElementById('tr-tbody').innerHTML =
-        '<tr><td colspan="7" class="empty">⏳ ' + _pendingNightMode + ' 모드 전환 중 — 다음 사이클 후 갱신됩니다</td></tr>';
+        '<tr><td colspan="4" class="empty">⏳ ' + pending + ' 모드 전환 중 — 다음 사이클 후 갱신됩니다</td></tr>';
       document.getElementById('tr-pagination').innerHTML = '';
       return;
     }
@@ -2955,11 +2947,19 @@ async function loadTrades(resetPage) {
     const d = await fetch('/api/trades?days=30').then(r=>r.json());
     let trades = d.trades || [];
 
-    // 필터
-    if(dateVal)  trades = trades.filter(t => t.date === dateVal);
-    if(clsVal)   trades = trades.filter(t => t.classify === clsVal);
-    if(srcVal)   trades = trades.filter(t => t.source === srcVal);
-    if(modeVal)  trades = trades.filter(t => (t.mode || 'paper') === modeVal);
+    // 현재 뷰(kitty/night) + 현재 모드(paper/live) 자동 필터
+    trades = trades.filter(t => t.source === viewSrc);
+    trades = trades.filter(t => (t.mode || 'paper') === viewMode);
+
+    // 추가 필터
+    if(dateVal) trades = trades.filter(t => t.date === dateVal);
+    if(clsVal)  trades = trades.filter(t => t.classify === clsVal);
+
+    // 헤더에 현재 뷰/모드 표시
+    const srcLabel  = viewSrc  === 'night' ? '🌙 Night' : '🐱 Kitty';
+    const modeLabel = viewMode === 'live'  ? 'Live' : 'Paper';
+    document.getElementById('tr-bar-total').innerHTML =
+      srcLabel + ' &nbsp;·&nbsp; <span style="color:' + (viewMode==='live'?'#d29922':'#8b949e') + ';font-weight:700">' + modeLabel + '</span>&nbsp; 전체 거래 <strong id="tr-total-cnt">-</strong>건';
 
     _trAllTrades = trades;
 
@@ -3049,10 +3049,8 @@ function goTradePage(p) {
 }
 
 function clearTradeFilter() {
-  document.getElementById('tr-date').value  = '';
-  document.getElementById('tr-cls').value   = '';
-  document.getElementById('tr-src').value   = '';
-  document.getElementById('tr-mode').value  = '';
+  document.getElementById('tr-date').value = '';
+  document.getElementById('tr-cls').value  = '';
   loadTrades();
 }
 
@@ -3368,6 +3366,8 @@ switchMain('agents');
       fetch('/api/night/mode').then(r=>r.json()),
       fetch('/api/kitty/mode').then(r=>r.json()),
     ]);
+    _nightMode = dn.mode;
+    _kittyMode = dk.mode;
     updateGnbBadge(_currentView === 'night' ? dn.mode : dk.mode);
   } catch(e) {}
 })();
