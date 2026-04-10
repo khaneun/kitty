@@ -1904,7 +1904,7 @@ function switchMain(name) {
     if(el) el.classList.toggle('active', t===name);
   });
   document.getElementById('subtabs').style.display = name==='admin' ? 'flex' : 'none';
-  ['errors','tokens','advisor','agents','trades'].forEach(n => {
+  ['errors','tokens','advisor','llm','agents','trades'].forEach(n => {
     document.getElementById('tab-'+n).classList.remove('active');
   });
   if(name === 'agents') {
