@@ -2,6 +2,28 @@
 
 ---
 
+## v2.5.1 — 2026-04-12
+
+### 버그픽스: GNB 모드 배지 paper 고착 문제 (`monitor/app.py`)
+
+#### 문제
+
+성적표 탭을 열거나 60초 자동 갱신 시 Live 모드임에도 GNB 배지가 "paper"로 표시되는 버그.
+
+#### 원인
+
+`loadPortfolio()`가 포트폴리오 스냅샷의 `trading_mode`로 GNB 배지를 갱신(`_syncGnbMode`)하는 구조였음.
+포트폴리오 스냅샷은 사이클이 돌아야만 업데이트되므로, 모드 변경 후 첫 사이클 전까지는 스냅샷이 구 모드(paper)를 유지.
+페이지 새로고침 시 `_pendingKittyMode`가 초기화되어 pending 보호 장치가 작동하지 않고, 60초마다 배지가 "paper"로 리셋되는 루프에 빠짐.
+
+#### 수정
+
+- `_syncGnbMode()` 동작 변경: pending 상태(모드 전환 대기 중)일 때만 스냅샷과 대조 후 pending 해제. pending 없을 때는 스냅샷으로 배지를 덮어쓰지 않음.
+- `syncModeBadge()` 신규 함수 추가: `/api/kitty/mode` · `/api/night/mode` 엔드포인트(mode_config.json 기준, 모드 변경 즉시 반영)에서 배지를 읽어옴.
+- 성적표 탭 진입 시 + 60초 폴링 시 `syncModeBadge()` 호출 → 항상 최신 모드 표시.
+
+---
+
 ## v2.5.0 — 2026-04-11
 
 ### 에이전트 프롬프트 전면 강화 + 누적 피드백 시스템 + 매매 안전장치

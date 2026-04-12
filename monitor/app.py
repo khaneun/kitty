@@ -2074,6 +2074,7 @@ function switchMain(name) {
       document.getElementById('agents-night').style.display = 'none';
       loadTendency(); loadPortfolio(); loadAgentScores();
     }
+    syncModeBadge(); // mode_config 기준으로 배지 즉시 갱신
   } else if(name === 'trades') {
     document.getElementById('tab-trades').classList.add('active');
     loadTrades();
@@ -2484,10 +2485,25 @@ function updateGnbBadge(mode) {
 
 function _syncGnbMode(snapshotMode, view) {
   const pending = view === 'night' ? _pendingNightMode : _pendingKittyMode;
-  if(pending && snapshotMode !== pending) return; // 아직 전환 중 — 덮어쓰지 않음
+  // pending 없으면 스냅샷으로 배지 덮어쓰지 않음 — syncModeBadge()가 mode_config 기준으로 담당
+  if(!pending) return;
+  if(snapshotMode !== pending) return; // 아직 전환 중 — 스냅샷이 아직 구 모드
+  // 스냅샷이 새 모드로 업데이트됨 — pending 해제 후 배지 확정
   if(view === 'night') _pendingNightMode = null;
   else _pendingKittyMode = null;
   if(view === _currentView) updateGnbBadge(snapshotMode);
+}
+
+// mode_config.json(즉시 반영)에서 배지를 읽어옴 — 스냅샷보다 신뢰성 높음
+async function syncModeBadge() {
+  try {
+    const endpoint = _currentView === 'night' ? '/api/night/mode' : '/api/kitty/mode';
+    const d = await fetch(endpoint).then(r=>r.json());
+    if(_currentView === 'night') _nightMode = d.mode;
+    else _kittyMode = d.mode;
+    const pending = _currentView === 'night' ? _pendingNightMode : _pendingKittyMode;
+    if(!pending) updateGnbBadge(d.mode);
+  } catch(e) {}
 }
 
 // ── 투자 성향 카드 ───────────────────────────────────────
@@ -3376,6 +3392,7 @@ setInterval(()=>{
   if(document.getElementById('tab-agents').classList.contains('active')){
     if(_currentView === 'night'){ loadNightPortfolio(); loadNightAgentScores(); }
     else { loadPortfolio(); loadAgentScores(); }
+    syncModeBadge(); // 60초마다 mode_config 기준으로 배지 재동기화
   }
   if(document.getElementById('tab-trades').classList.contains('active')){
     loadTrades(false);
