@@ -2963,19 +2963,18 @@ async function loadTrades(resetPage) {
     const d = await fetch('/api/trades?days=30').then(r=>r.json());
     let trades = d.trades || [];
 
-    // 현재 뷰(kitty/night) + 현재 모드(paper/live) 자동 필터
+    // 현재 뷰(kitty/night) 필터 — 모드 필터 없음 (L/P 배지로 구분)
+    // 모드 필드가 없는 구형 report는 paper 기본값이나, live 전환 후에도 이력이 보여야 함
     trades = trades.filter(t => t.source === viewSrc);
-    trades = trades.filter(t => (t.mode || 'paper') === viewMode);
 
     // 추가 필터
     if(dateVal) trades = trades.filter(t => t.date === dateVal);
     if(clsVal)  trades = trades.filter(t => t.classify === clsVal);
 
-    // 헤더에 현재 뷰/모드 표시
-    const srcLabel  = viewSrc  === 'night' ? '🌙 Night' : '🐱 Kitty';
-    const modeLabel = viewMode === 'live'  ? 'Live' : 'Paper';
+    // 헤더
+    const srcLabel = viewSrc === 'night' ? '🌙 Night' : '🐱 Kitty';
     document.getElementById('tr-bar-total').innerHTML =
-      srcLabel + ' &nbsp;·&nbsp; <span style="color:' + (viewMode==='live'?'#d29922':'#8b949e') + ';font-weight:700">' + modeLabel + '</span>&nbsp; 전체 거래 <strong id="tr-total-cnt">-</strong>건';
+      srcLabel + '&nbsp; 전체 거래 <strong id="tr-total-cnt">-</strong>건';
 
     _trAllTrades = trades;
 

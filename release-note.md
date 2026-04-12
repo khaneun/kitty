@@ -2,6 +2,37 @@
 
 ---
 
+## v2.5.2 — 2026-04-12
+
+### 버그픽스: 매매일지 Live 모드에서 거래 0건 표시 (`monitor/app.py`)
+
+#### 문제
+
+`mode_config.json`이 "live"인 상태에서 매매일지가 아무것도 표시되지 않는 버그.
+
+#### 원인
+
+매매일지 프론트 필터가 `t.mode === _kittyMode`로 동작하는데, 기존 report 파일(v2.4.0 이전 생성)의 cycle에는 `mode` 필드가 없어 전부 "paper" 기본값 처리됨. Live 모드에서 `'paper' === 'live'` → 0건.
+
+`mode` 필드는 `report.py` / `main.py`에 이미 올바르게 구현되어 있으며, 다음 거래일(4/14~)부터 생성되는 report는 정상적으로 mode 포함. 기존 이력 파일은 소급 불가.
+
+#### 수정
+
+`loadTrades()`에서 자동 모드 필터 제거. source(kitty/night) 기준만 필터링. 각 거래 행의 L/P 배지로 모드 구분. 헤더에서 모드 레이블 제거.
+
+---
+
+### 인프라: monitor 전용 재시작 스크립트 추가 (`restart-monitor.sh`)
+
+monitor 재배포 시 볼륨 마운트 누락 반복 방지를 위해 `restart-monitor.sh` 추가. `start.sh`의 monitor 블록과 동일한 전체 볼륨 목록을 유지하며 Secrets Manager에서 자격증명 자동 로드.
+
+```bash
+# monitor만 빠르게 재배포할 때
+ssh -i ~/kitty-key.pem ec2-user@<IP> "cd ~/kitty && git pull && bash restart-monitor.sh"
+```
+
+---
+
 ## v2.5.1 — 2026-04-12
 
 ### 버그픽스: GNB 모드 배지 paper 고착 문제 (`monitor/app.py`)
