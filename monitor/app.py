@@ -2560,12 +2560,29 @@ function toggleReport() {
 // ── 포트폴리오 탭 ────────────────────────────────────────
 async function loadPortfolio() {
   try {
-    const d = await fetch('/api/portfolio').then(r=>r.json());
+    const [d, modeRes] = await Promise.all([
+      fetch('/api/portfolio').then(r=>r.json()),
+      fetch('/api/kitty/mode').then(r=>r.json()),
+    ]);
+    const configMode = modeRes.mode;
+    _kittyMode = configMode;  // 항상 mode_config 기준으로 갱신 (경쟁 조건 제거)
+
+    // pending 확인(사이클 전환 대기) — 스냅샷 일치 시 pending 해제
+    if(d.trading_mode) _syncGnbMode(d.trading_mode, 'kitty');
+
+    // 스냅샷 모드 ≠ 설정 모드: 구 모드 데이터를 표시하지 않음
+    if(d.trading_mode && d.trading_mode !== configMode) {
+      ['pf-total-eval','pf-total-pnl','pf-cash']
+        .forEach(id => { const el = document.getElementById(id); if(el) el.textContent = '-'; });
+      document.getElementById('pf-ts').textContent = '';
+      if(d.ts) document.getElementById('upd-txt').textContent = '갱신 '+d.ts.slice(5,16)+' KST';
+      document.getElementById('pf-tbody').innerHTML =
+        '<tr><td colspan="5" class="empty">⏳ ' + configMode + ' 모드 — 다음 사이클 후 포트폴리오가 갱신됩니다</td></tr>';
+      return;
+    }
+
     const fmtW = n => n.toLocaleString('ko-KR');
     const pnlColor = n => n>=0?'#f85149':'#4493f8';  // 한국 기준: 상승=빨강, 하락=파랑
-
-    // GNB 셀렉터 동기화 (전환 요청 pending 중이면 스킵)
-    if(d.trading_mode) _syncGnbMode(d.trading_mode, 'kitty');
 
     document.getElementById('pf-total-eval').textContent = d.total_eval ? fmtW(d.total_eval) : '-';
     const pnlEl = document.getElementById('pf-total-pnl');

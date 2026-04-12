@@ -2,6 +2,24 @@
 
 ---
 
+## v2.5.3 — 2026-04-12
+
+### 버그픽스: KR 성적표 포트폴리오 모드 불일치 표시 (`monitor/app.py`)
+
+#### 문제
+
+`mode_config.json`이 "live"인데도 성적표의 KR 포트폴리오가 구 paper 스냅샷 데이터를 그대로 표시.
+
+#### 원인
+
+`loadPortfolio()`가 포트폴리오 스냅샷만 읽고 현재 설정 모드를 확인하지 않음. Night은 사이클이 돌면서 스냅샷이 live로 갱신되기 때문에 정상처럼 보였으나, KR은 주말/장외에 사이클이 없으면 구 paper 스냅샷이 그대로 노출됨.
+
+#### 수정
+
+`loadPortfolio()`에서 `/api/portfolio`와 `/api/kitty/mode`를 동시에 fetch(Promise.all). 스냅샷의 `trading_mode` ≠ `mode_config` 모드일 때 수치를 숨기고 "⏳ live 모드 — 다음 사이클 후 갱신됩니다" 안내 표시. `_kittyMode`도 여기서 원자적으로 설정하여 IIFE와의 경쟁 조건 제거.
+
+---
+
 ## v2.5.2 — 2026-04-12
 
 ### 버그픽스: 매매일지 Live 모드에서 거래 0건 표시 (`monitor/app.py`)
