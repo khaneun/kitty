@@ -11,6 +11,25 @@ from .base import BaseAgent
 # 재시도해도 해결되지 않는 에러 키워드 — 즉시 포기
 _NON_RETRYABLE = ("장종료", "매매불가", "거래정지", "상장폐지", "주문불가")
 
+
+def _round_to_tick(price: int) -> int:
+    """KR 주식 호가 단위에 맞게 내림 처리 (KIS 규정)"""
+    if price < 2_000:
+        tick = 1
+    elif price < 5_000:
+        tick = 5
+    elif price < 20_000:
+        tick = 10
+    elif price < 50_000:
+        tick = 50
+    elif price < 200_000:
+        tick = 100
+    elif price < 500_000:
+        tick = 500
+    else:
+        tick = 1_000
+    return (price // tick) * tick
+
 SYSTEM_PROMPT = """당신은 한국 주식 자동매매 시스템의 매수 실행 전문가입니다.
 
 ━━━ 임무 ━━━
@@ -73,17 +92,25 @@ class BuyExecutorAgent(BaseAgent):
         """
         chunk_results: list[dict[str, Any]] = []
 
+        # 수량 0 방어
+        if quantity <= 0:
+            _slabel = f"{name}({symbol})" if name else symbol
+            logger.warning(f"[매수실행가] {_slabel} 주문 수량 0 — 스킵")
+            return [{"symbol": symbol, "status": "SKIPPED", "reason": "주문수량 0", "quantity": 0, "chunk": 1}]
+
         # Determine order price — 체결 확률 높이기 위해 현재가 대비 +0.3% 설정
         order_price = price
         if order_price == 0:
             try:
                 quote = await self.broker.get_quote(symbol)
-                # 매수 시 약간 높은 가격으로 지정가 → 체결률 향상
-                order_price = round(quote.current_price * 1.003)
+                # 매수 시 약간 높은 가격으로 지정가 → 체결률 향상 (호가 단위 맞춤)
+                order_price = _round_to_tick(round(quote.current_price * 1.003))
             except Exception as e:
                 _slabel = f"{name}({symbol})" if name else symbol
                 logger.warning(f"[매수실행가] {_slabel} 현재가 조회 실패, 시장가 사용: {e}")
                 order_price = 0
+        elif order_price > 0:
+            order_price = _round_to_tick(order_price)
 
         use_split = order_type == "SPLIT" or quantity > 5
 
@@ -228,6 +255,12 @@ class BuyExecutorAgent(BaseAgent):
             price = int(order.get("price", 0))
             order_type = order.get("order_type", "SINGLE")
             priority = order.get("priority", "NORMAL")
+
+            # Pre-flight check: 수량 0 즉시 스킵
+            if quantity <= 0:
+                logger.warning(f"[매수실행가] {_label} 주문 수량 0 — 스킵 (자산운용가 오류)")
+                all_chunk_results.append({"symbol": symbol, "status": "SKIPPED", "reason": "주문수량 0", "quantity": 0})
+                continue
 
             # Pre-flight check: skip near upper limit
             quote = quote_map.get(symbol)
