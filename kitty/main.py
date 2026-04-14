@@ -625,6 +625,11 @@ async def main() -> None:
                     await reporter.report_error(str(e))
                 finally:
                     _last_cycle_time = time.monotonic()
+                    # 매 사이클 완료 시 snapshot 갱신 (주문 없는 사이클에서도 현재가 반영)
+                    try:
+                        await print_portfolio_and_balance(broker)
+                    except Exception as _se:
+                        logger.debug(f"포트폴리오 스냅샷 갱신 실패: {_se}")
             else:
                 logger.debug("매매 일시정지 중...")
 
