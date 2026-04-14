@@ -2969,9 +2969,8 @@ async function loadTrades(resetPage) {
     const d = await fetch('/api/trades?days=30').then(r=>r.json());
     let trades = d.trades || [];
 
-    // 현재 뷰(kitty/night) 필터 — 모드 필터 없음 (L/P 배지로 구분)
-    // 모드 필드가 없는 구형 report는 paper 기본값이나, live 전환 후에도 이력이 보여야 함
-    trades = trades.filter(t => t.source === viewSrc);
+    // 현재 뷰(kitty/night) + 현재 모드(live/paper) 필터
+    trades = trades.filter(t => t.source === viewSrc && (t.mode || 'paper') === viewMode);
 
     // 추가 필터
     if(dateVal) trades = trades.filter(t => t.date === dateVal);
