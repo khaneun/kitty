@@ -458,6 +458,19 @@ def _format_tendency_update(profile: dict) -> str:
 
 async def main() -> None:
     setup_logger()
+
+    # 저장된 모드 설정 복원 (대시보드 전환 영속화 — 컨테이너 재시작 후에도 유지)
+    _MODE_CONFIG = Path("commands/mode_config.json")
+    if _MODE_CONFIG.exists():
+        try:
+            saved_mode = json.loads(_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "")
+            if saved_mode in ("paper", "live"):
+                from kitty.config import TradingMode
+                settings.trading_mode = TradingMode(saved_mode)
+                logger.info(f"[mode_config] 저장된 모드 복원: {saved_mode}")
+        except Exception as e:
+            logger.warning(f"[mode_config] 읽기 실패: {e}")
+
     logger.info(f"🐱 Kitty 시작 - 모드: {settings.trading_mode.value}")
 
     broker = KISBroker()

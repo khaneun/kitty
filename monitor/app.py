@@ -2570,14 +2570,14 @@ async function loadPortfolio() {
     // pending 확인(사이클 전환 대기) — 스냅샷 일치 시 pending 해제
     if(d.trading_mode) _syncGnbMode(d.trading_mode, 'kitty');
 
-    // 스냅샷 모드 ≠ 설정 모드: 구 모드 데이터를 표시하지 않음
-    if(d.trading_mode && d.trading_mode !== configMode) {
+    // 모드 전환 pending 중일 때만 구 모드 데이터 숨김 (Night 포트폴리오와 동일한 로직)
+    if(_pendingKittyMode && d.trading_mode && d.trading_mode !== _pendingKittyMode) {
       ['pf-total-eval','pf-total-pnl','pf-cash']
         .forEach(id => { const el = document.getElementById(id); if(el) el.textContent = '-'; });
       document.getElementById('pf-ts').textContent = '';
       if(d.ts) document.getElementById('upd-txt').textContent = '갱신 '+d.ts.slice(5,16)+' KST';
       document.getElementById('pf-tbody').innerHTML =
-        '<tr><td colspan="5" class="empty">⏳ ' + configMode + ' 모드 — 다음 사이클 후 포트폴리오가 갱신됩니다</td></tr>';
+        '<tr><td colspan="5" class="empty">⏳ ' + _pendingKittyMode + ' 모드 전환 중 — 다음 사이클 후 갱신됩니다</td></tr>';
       return;
     }
 
@@ -2965,17 +2965,6 @@ async function loadTrades(resetPage) {
     const clsVal   = document.getElementById('tr-cls').value;
     const viewSrc  = _currentView === 'night' ? 'night' : 'kitty';
     const viewMode = _currentView === 'night' ? _nightMode : _kittyMode;
-
-    // 모드 전환 pending 중이면 빈 화면
-    const pending = _currentView === 'night' ? _pendingNightMode : _pendingKittyMode;
-    if(pending) {
-      ['tr-total-cnt','tr-buy-cnt','tr-sell-cnt','tr-profit-cnt','tr-loss-cnt','tr-other-cnt']
-        .forEach(id => document.getElementById(id).textContent = '-');
-      document.getElementById('tr-tbody').innerHTML =
-        '<tr><td colspan="4" class="empty">⏳ ' + pending + ' 모드 전환 중 — 다음 사이클 후 갱신됩니다</td></tr>';
-      document.getElementById('tr-pagination').innerHTML = '';
-      return;
-    }
 
     const d = await fetch('/api/trades?days=30').then(r=>r.json());
     let trades = d.trades || [];
