@@ -1932,7 +1932,7 @@ body{padding-bottom:80px}
 <div id="tab-trades" class="tab-content">
 <div class="wrap">
   <div class="tr-bar-wrap">
-    <div class="tr-bar-total">전체 거래 <strong id="tr-total-cnt">-</strong>건</div>
+    <div class="tr-bar-total" id="tr-bar-total">전체 거래 <strong id="tr-total-cnt">-</strong>건</div>
     <div class="tr-bar-row">
       <div class="tr-bar-row-lbl">매수 / 매도</div>
       <div class="tr-bar-track">
