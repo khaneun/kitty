@@ -539,16 +539,16 @@ async def api_set_mode(req: Request):
 
 @app.get("/api/night/mode")
 def api_get_night_mode(req: Request):
-    """Night 현재 설정 모드 반환 — config 파일 우선, 없으면 포트폴리오 스냅샷에서"""
+    """Night 현재 동작 모드 반환 — 포트폴리오 스냅샷 우선(실제값), 없으면 config fallback"""
     _auth(req)
-    if NIGHT_MODE_CONFIG.exists():
-        try:
-            return {"mode": json.loads(NIGHT_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "paper")}
-        except Exception:
-            pass
     if NIGHT_PORTFOLIO_SNAPSHOT.exists():
         try:
             return {"mode": json.loads(NIGHT_PORTFOLIO_SNAPSHOT.read_text(encoding="utf-8")).get("trading_mode", "paper")}
+        except Exception:
+            pass
+    if NIGHT_MODE_CONFIG.exists():
+        try:
+            return {"mode": json.loads(NIGHT_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "paper")}
         except Exception:
             pass
     return {"mode": "paper"}
@@ -556,17 +556,17 @@ def api_get_night_mode(req: Request):
 
 @app.get("/api/kitty/mode")
 def api_get_kitty_mode(req: Request):
-    """KR 현재 설정 모드 반환 — config 파일 우선, 없으면 포트폴리오 스냅샷에서"""
+    """KR 현재 동작 모드 반환 — 포트폴리오 스냅샷 우선(실제값), 없으면 config fallback"""
     _auth(req)
-    if KR_MODE_CONFIG.exists():
-        try:
-            return {"mode": json.loads(KR_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "paper")}
-        except Exception:
-            pass
     pf = LOG_DIR / "portfolio_snapshot.json"
     if pf.exists():
         try:
             return {"mode": json.loads(pf.read_text(encoding="utf-8")).get("trading_mode", "paper")}
+        except Exception:
+            pass
+    if KR_MODE_CONFIG.exists():
+        try:
+            return {"mode": json.loads(KR_MODE_CONFIG.read_text(encoding="utf-8")).get("mode", "paper")}
         except Exception:
             pass
     return {"mode": "paper"}

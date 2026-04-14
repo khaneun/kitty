@@ -565,6 +565,7 @@ async def main() -> None:
                         broker.reset_token()
                         logger.info(f"[모니터] 모드 전환: {new_mode}")
                         await reporter.send(f"🔄 모드 전환: `{new_mode}` (모니터 대시보드)")
+                        await _cycle_now()  # 즉시 사이클 실행 → 포트폴리오 현행화
                 except Exception as e:
                     logger.warning(f"모드 전환 요청 처리 실패: {e}")
                 finally:

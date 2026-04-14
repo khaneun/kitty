@@ -454,6 +454,11 @@ async def main() -> None:
                         broker.reset_token()
                         logger.info(f"[Night:모드전환] {new_mode}")
                         await reporter.send(f"🔄 Night 모드 전환: `{new_mode}` (모니터 대시보드)")
+                        await run_trading_cycle(  # 즉시 사이클 실행 → 포트폴리오 현행화
+                            broker, sector_analyst, stock_evaluator, stock_picker,
+                            asset_manager, buy_executor, sell_executor,
+                            tendency_agent, reporter, daily_report,
+                        )
                 except Exception as e:
                     logger.warning(f"[Night:모드전환] 요청 처리 실패: {e}")
                 finally:
