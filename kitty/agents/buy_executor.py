@@ -256,16 +256,18 @@ class BuyExecutorAgent(BaseAgent):
             order_type = order.get("order_type", "SINGLE")
             priority = order.get("priority", "NORMAL")
 
+            # quote/name/label은 사전 체크 전에 먼저 설정
+            quote = quote_map.get(symbol)
+            name = quote["name"] if quote else ""
+            _label = f"{name}({symbol})" if name else symbol
+
             # Pre-flight check: 수량 0 즉시 스킵
             if quantity <= 0:
                 logger.warning(f"[매수실행가] {_label} 주문 수량 0 — 스킵 (자산운용가 오류)")
                 all_chunk_results.append({"symbol": symbol, "status": "SKIPPED", "reason": "주문수량 0", "quantity": 0})
                 continue
 
-            # Pre-flight check: skip near upper limit
-            quote = quote_map.get(symbol)
-            name = quote["name"] if quote else ""
-            _label = f"{name}({symbol})" if name else symbol
+            # Pre-flight check: 상한가 근접 스킵
             if quote and quote["change_rate"] >= 29.5:
                 logger.warning(f"[매수실행가] {_label} 상한가 근접 - 매수 스킵")
                 all_chunk_results.append({
