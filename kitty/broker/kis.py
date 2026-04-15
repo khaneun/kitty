@@ -127,7 +127,7 @@ class KISBroker:
 
         make_request: async callable() → httpx.Response
         - 429 레이트리밋: 30~40s 고정 대기 후 재시도
-        - 500/503 서버 오류: 지수 백오프 (2s → 4s → 8s)
+        - 500/503 서버 오류: 지수 백오프 (10s → 20s → 30s) — KIS 새벽 점검 대응
         - 네트워크 오류: 지수 백오프
         - 다른 4xx/5xx: 즉시 raise
         """
@@ -147,7 +147,8 @@ class KISBroker:
                     )
                     continue
                 if resp.status_code in (500, 503):
-                    wait = min((attempt + 1) * 2.0, 8.0) + random.uniform(0.0, 1.0)
+                    # 새벽 KIS 정기 점검(04:00~06:00 KST) 대응 — 대기 30s까지 늘림
+                    wait = min((attempt + 1) * 10.0, 30.0) + random.uniform(0.0, 2.0)
                     logger.warning(
                         f"[KIS] {label} 서버오류({resp.status_code}) — "
                         f"{wait:.1f}s 대기 ({attempt + 1}/{retries})"

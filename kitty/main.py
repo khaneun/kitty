@@ -621,8 +621,14 @@ async def main() -> None:
                             logger.error(f"사이클 평가 오류: {e}")
 
                 except Exception as e:
-                    logger.error(f"매매 사이클 오류: {e}")
-                    await reporter.report_error(str(e))
+                    err_str = str(e)
+                    # KIS 서버 일시 장애(500/503)이고 장 외 시간이면 Telegram 불필요
+                    is_kis_server_err = any(c in err_str for c in ("HTTP 500", "HTTP 503", "재시도 초과"))
+                    if is_kis_server_err and not _is_market_hours():
+                        logger.warning(f"[KIS 일시 장애] 장 외 — 다음 사이클 대기: {err_str}")
+                    else:
+                        logger.error(f"매매 사이클 오류: {err_str}")
+                        await reporter.report_error(err_str)
                 finally:
                     _last_cycle_time = time.monotonic()
                     # 매 사이클 완료 시 snapshot 갱신 (주문 없는 사이클에서도 현재가 반영)
