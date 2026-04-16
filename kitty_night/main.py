@@ -434,12 +434,16 @@ async def main() -> None:
         else:
             logger.info("🌙 LIVE MODE — 한국장 시간(CLOSED), 미국장 대기 중")
 
-    await reporter.send(
-        f"🌙 *Kitty Night Mode Started!*\n"
-        f"Mode: `{night_settings.trading_mode.value}`\n"
-        f"Market: US (NYSE/NASDAQ)\n"
-        f"Cycle interval: {night_settings.cycle_seconds}s"
-    )
+    # 기동 알람 — CLOSED(한국 장중) 시간이면 발송 생략
+    if get_market_phase() != MarketPhase.CLOSED:
+        await reporter.send(
+            f"🌙 *Kitty Night Mode Started!*\n"
+            f"Mode: `{night_settings.trading_mode.value}`\n"
+            f"Market: US (NYSE/NASDAQ)\n"
+            f"Cycle interval: {night_settings.cycle_seconds}s"
+        )
+    else:
+        logger.info("🌙 Night Mode 기동 — CLOSED 페이즈, 텔레그램 알람 생략")
 
     last_report_date = daily_report.date
     last_eval_done = False
