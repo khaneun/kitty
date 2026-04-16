@@ -239,15 +239,17 @@ class TelegramReporter:
             await update.message.reply_text("브로커 미연결")  # type: ignore[union-attr]
             return
         try:
-            balance = await self._broker.get_balance()
+            balance, cash = await asyncio.gather(
+                self._broker.get_balance(),
+                self._broker.get_available_cash(),
+            )
             summary = balance.get("output2", [{}])[0]
-            cash = int(summary.get("dnca_tot_amt", 0))
             total_eval = int(summary.get("tot_evlu_amt", 0))
             buy_amt = int(summary.get("pchs_amt_smtl_amt", 0))
             pnl = int(summary.get("evlu_pfls_smtl_amt", 0))
             await update.message.reply_text(  # type: ignore[union-attr]
                 f"💰 *잔고 현황*\n"
-                f"가용현금: `{cash:,}원`\n"
+                f"주문가능: `{cash:,}원`\n"
                 f"주식매입: `{buy_amt:,}원`\n"
                 f"평가금액: `{total_eval:,}원`\n"
                 f"평가손익: `{pnl:+,}원`",
