@@ -419,16 +419,20 @@ async def main() -> None:
     # Night 청산 요청 핸들러 백그라운드 태스크
     asyncio.create_task(_night_force_sell_handler(broker))
 
-    # 실전 모드 기동 시 경고 카운트다운
+    # 실전 모드 기동 시 경고 카운트다운 — 미국장 활성 시간대일 때만 발송
     if night_settings.trading_mode.value == "live":
-        logger.warning("⚠️  LIVE MODE — 실제 자금으로 거래됩니다. 30초 후 시작...")
-        await reporter.send(
-            "⚠️ *LIVE MODE 기동!*\n"
-            "실제 자금으로 US 주식 자동매매를 시작합니다.\n"
-            "30초 안에 취소하려면 컨테이너를 중지하세요."
-        )
-        await asyncio.sleep(30)
-        logger.warning("⚠️  LIVE MODE 시작!")
+        _startup_phase = get_market_phase()
+        if _startup_phase != MarketPhase.CLOSED:
+            logger.warning("⚠️  LIVE MODE — 실제 자금으로 거래됩니다. 30초 후 시작...")
+            await reporter.send(
+                "⚠️ *LIVE MODE 기동!*\n"
+                "실제 자금으로 US 주식 자동매매를 시작합니다.\n"
+                "30초 안에 취소하려면 컨테이너를 중지하세요."
+            )
+            await asyncio.sleep(30)
+            logger.warning("⚠️  LIVE MODE 시작!")
+        else:
+            logger.info("🌙 LIVE MODE — 한국장 시간(CLOSED), 미국장 대기 중")
 
     await reporter.send(
         f"🌙 *Kitty Night Mode Started!*\n"

@@ -253,8 +253,10 @@ class KISBroker:
             logger.warning(f"가용현금 조회 실패: {data.get('msg1')}")
             return 0
         output = data.get("output", {})
-        cash = int(output.get("ord_psbl_cash", 0))
-        logger.info(f"주문가능현금: {cash:,}원")
+        # nrcvb_buy_amt(미수없는매수금액): 가수도정산금액(당일매도 재투자분) 포함한 실제 매수 가능 금액
+        # ord_psbl_cash(주문가능현금): 예수금 현금만 — 당일 매도 재투자분 미포함으로 과소 계상됨
+        cash = int(output.get("nrcvb_buy_amt", 0))
+        logger.info(f"매수가능금액(미수없음): {cash:,}원")
         return cash
 
     async def buy(self, symbol: str, quantity: int, price: int = 0, name: str = "") -> OrderResult:
