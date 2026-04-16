@@ -3,8 +3,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from .logger import logger
+
+_KST = ZoneInfo("Asia/Seoul")
 
 if TYPE_CHECKING:
     from kitty.broker import KISBroker
@@ -67,7 +70,7 @@ async def print_portfolio_and_balance(broker: "KISBroker", label: str = "") -> N
         try:
             from kitty.config import settings as _cfg
             snapshot = {
-                "ts":            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ts":            datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S"),
                 "trading_mode":  _cfg.trading_mode.value,
                 "available_cash": available_cash,
                 "total_eval":    total_eval,

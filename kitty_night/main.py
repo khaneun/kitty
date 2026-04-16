@@ -440,6 +440,7 @@ async def main() -> None:
     last_report_date = daily_report.date
     last_eval_done = False
     cycle_interval = night_settings.cycle_seconds
+    _last_closed_snapshot = 0.0  # CLOSED 페이즈 스냅샷 마지막 갱신 시각
 
     try:
         while True:
@@ -476,6 +477,23 @@ async def main() -> None:
 
             if phase == MarketPhase.CLOSED:
                 logger.info(f"[Night] Phase: CLOSED — waiting for night window")
+                # 10분마다 스냅샷 갱신 — 모니터에 최신 잔고 표시
+                if time.monotonic() - _last_closed_snapshot >= 600:
+                    try:
+                        _bal = await broker.get_balance()
+                        _hld = _bal.get("holdings", [])
+                        _usd = await broker.get_available_usd()
+                        save_portfolio_snapshot(
+                            trading_mode=night_settings.trading_mode.value,
+                            available_usd=_usd,
+                            total_eval_usd=sum(float(h.get("eval_amount", 0)) for h in _hld) + _usd,
+                            total_pnl_usd=sum(float(h.get("pnl_amount", 0)) for h in _hld),
+                            holdings=_hld,
+                        )
+                        _last_closed_snapshot = time.monotonic()
+                        logger.info(f"[Night] CLOSED 스냅샷 갱신 — available: ${_usd:,.2f}")
+                    except Exception as _e:
+                        logger.debug(f"[Night] CLOSED 스냅샷 갱신 실패: {_e}")
                 await asyncio.sleep(60)
                 continue
 

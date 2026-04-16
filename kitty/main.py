@@ -581,6 +581,10 @@ async def main() -> None:
             # 8:50 이전 또는 15:30 이후에는 사이클 건너뜀 (모의/실전 공통)
             if not _is_pre_market_or_market():
                 logger.debug("장 외 시간 - 대기 중")
+                try:
+                    await print_portfolio_and_balance(broker)
+                except Exception as _se:
+                    logger.debug(f"장 외 스냅샷 갱신 실패: {_se}")
             elif not reporter.is_paused:
                 try:
                     await run_trading_cycle(
