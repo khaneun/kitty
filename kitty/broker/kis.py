@@ -441,12 +441,12 @@ class KISBroker:
                 headers=headers,
                 params={
                     "FID_COND_MRKT_DIV_CODE": market,
-                    "FID_COND_SCR_DIV_CODE": "20171" if market == "Q" else "20101",
+                    "FID_COND_SCR_DIV_CODE": "20171",   # 항상 "20171" (KOSPI/KOSDAQ 공통)
                     "FID_INPUT_ISCD": "0000",
                     "FID_DIV_CLS_CODE": "0",
                     "FID_BLNG_CLS_CODE": "0",
                     "FID_TRGT_CLS_CODE": "111111111",
-                    "FID_TRGT_EXLS_CLS_CODE": "000000",
+                    "FID_TRGT_EXLS_CLS_CODE": "0000000000",
                     "FID_INPUT_PRICE_1": "",
                     "FID_INPUT_PRICE_2": "",
                     "FID_VOL_CNT": "",
@@ -485,23 +485,25 @@ class KISBroker:
         await self._throttle_quote()
 
         async def _req():
-            headers = await self._headers("FHPST01720000")
+            headers = await self._headers("FHPST01700000")
             return await self._client.get(
-                f"{self._base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+                f"{self._base_url}/uapi/domestic-stock/v1/ranking/fluctuation",
                 headers=headers,
                 params={
                     "FID_COND_MRKT_DIV_CODE": market,
-                    "FID_COND_SCR_DIV_CODE": "20172" if market == "Q" else "20170",
+                    "FID_COND_SCR_DIV_CODE": "20170",   # 항상 "20170" (등락률 순위)
                     "FID_INPUT_ISCD": "0000",
-                    "FID_RANK_SORT_CLS_CODE": "0",       # 0 = 상승률 순
-                    "FID_DIFF_CLS_CODE":       "2",       # 2 = 전일 대비
-                    "FID_TRGT_CLS_CODE":       "0",
-                    "FID_TRGT_EXLS_CLS_CODE":  "0000000000",
-                    "FID_INPUT_PRICE_1":        "",
-                    "FID_INPUT_PRICE_2":        "",
-                    "FID_RST_DVS_CODE":         "0",
-                    "FID_INPUT_ISCD2":          "",
-                    "FID_INPUT_DATE_1":         "",
+                    "FID_RANK_SORT_CLS_CODE": "0",
+                    "FID_INPUT_CNT_1": str(count),
+                    "FID_PRC_CLS_CODE": "0",
+                    "FID_INPUT_PRICE_1": "",
+                    "FID_INPUT_PRICE_2": "",
+                    "FID_VOL_CNT": "",
+                    "FID_TRGT_CLS_CODE": "0",
+                    "FID_TRGT_EXLS_CLS_CODE": "0",
+                    "FID_DIV_CLS_CODE": "0",
+                    "FID_RSFL_RATE1": "",
+                    "FID_RSFL_RATE2": "",
                 },
             )
 
@@ -509,8 +511,9 @@ class KISBroker:
         resp = await self._call_with_retry(_req, label)
         data = resp.json()
         result: list[dict[str, Any]] = []
+        # fluctuation API 종목코드 필드: stck_shrn_iscd (volume-rank는 mksc_shrn_iscd)
         for item in data.get("output", [])[:count]:
-            sym = item.get("mksc_shrn_iscd", "")
+            sym = item.get("stck_shrn_iscd", "") or item.get("mksc_shrn_iscd", "")
             if not sym:
                 continue
             result.append({
