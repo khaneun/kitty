@@ -28,6 +28,7 @@ from kitty_night.tools.market_calendar import (
     now_kst,
     seconds_until,
 )
+from kitty_night.tools.free_market_data import fetch_free_market_data
 from kitty_night.utils import logger, setup_night_logger
 from kitty_night.utils.portfolio import save_portfolio_snapshot
 
@@ -101,7 +102,7 @@ async def _night_force_sell_handler(broker: KISOverseasBroker) -> None:
 
 
 async def _collect_market_data(broker: KISOverseasBroker) -> dict:
-    """Collect US market barometer quotes + volume leaders"""
+    """Collect US market barometer quotes + volume leaders + free sector ETF/VIX data"""
     barometers: list[dict] = []
     for sym in _BAROMETER_SYMBOLS:
         try:
@@ -116,7 +117,15 @@ async def _collect_market_data(broker: KISOverseasBroker) -> dict:
     except Exception as e:
         logger.warning(f"Volume rank fetch failed (ignored): {e}")
 
-    return {"barometers": barometers, "volume_leaders": volume_leaders}
+    # Yahoo Finance — SPDR 섹터 ETF 11종 + VIX (무료, API 키 불필요)
+    free_data = await fetch_free_market_data()
+
+    return {
+        "barometers":    barometers,
+        "volume_leaders": volume_leaders,
+        "sector_etfs":   free_data.get("sector_etfs", []),
+        "vix":           free_data.get("vix", {}),
+    }
 
 
 async def run_trading_cycle(

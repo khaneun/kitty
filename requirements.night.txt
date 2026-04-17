@@ -15,3 +15,4 @@ openai>=1.30
 
 # ===== Night Mode 전용 =====
 exchange-calendars>=4.5        # NYSE/NASDAQ 휴장일 캘린더
+yfinance>=0.2.40               # Yahoo Finance — 섹터 ETF / VIX 무료 데이터
