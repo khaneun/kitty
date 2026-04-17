@@ -15,3 +15,4 @@ numpy>=1.26
 openai>=1.30
 # google-generativeai>=0.7  # Gemini 사용 시 주석 해제
 holidays
+pykrx>=1.0.47                  # KRX 공개 통계 (업종 지수, 외국인/기관 순매수)

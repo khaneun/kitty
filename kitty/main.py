@@ -45,6 +45,7 @@ from kitty.config import settings
 from kitty.evaluator import PerformanceEvaluator
 from kitty.report import DailyReport
 from kitty.telegram import TelegramReporter
+from kitty.tools.kr_market_data import fetch_kr_market_data
 from kitty.utils import logger, print_portfolio_and_balance, setup_logger
 
 
@@ -89,10 +90,17 @@ async def _collect_market_data(broker: KISBroker) -> dict:
 
     market_pool = kospi_vol + kosdaq_vol + kospi_chg + kosdaq_chg
 
+    # KRX 공개 데이터: 업종 지수 + 외국인/기관 순매수 (pykrx, 전일 기준)
+    kr_market = await fetch_kr_market_data()
+
     return {
-        "barometers": barometers,
-        "volume_leaders": kospi_vol,  # 기존 호환성 유지 (섹터분석가 입력)
-        "market_pool": market_pool,
+        "barometers":     barometers,
+        "volume_leaders": kospi_vol,         # 기존 호환성 유지 (섹터분석가 입력)
+        "market_pool":    market_pool,
+        "sector_indices": kr_market.get("sector_indices", []),
+        "foreign_net":    kr_market.get("foreign_net", []),
+        "inst_net":       kr_market.get("inst_net", []),
+        "kr_market_date": kr_market.get("date", ""),
     }
 
 
@@ -248,7 +256,11 @@ async def run_trading_cycle(
     market_data = await _collect_market_data(broker)
     logger.info(
         f"시장데이터: 지표 {len(market_data['barometers'])}개 | "
-        f"시장풀 {len(market_data['market_pool'])}개 (중복 포함)"
+        f"시장풀 {len(market_data['market_pool'])}개 | "
+        f"KRX업종 {len(market_data.get('sector_indices', []))}개 | "
+        f"외국인순매수 {len(market_data.get('foreign_net', []))}종목 | "
+        f"기관순매수 {len(market_data.get('inst_net', []))}종목 "
+        f"(KRX기준일: {market_data.get('kr_market_date', '?')})"
     )
 
     # 2. 섹터분석 (SectorAnalystAgent) — 실시간 데이터 기반
