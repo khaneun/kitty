@@ -215,6 +215,12 @@ async def run_trading_cycle(
         sym = vl.get("symbol", "")
         if sym:
             candidate_symbols.add(sym)
+    # 바로미터 개별주 항상 포함 — 섹터분석가가 candidates:0 반환해도 파이프라인 데이터 확보
+    _ETF_SYMBOLS = {"SPY", "QQQ"}
+    for bm in market_data.get("barometers", []):
+        sym = bm.get("symbol", "")
+        if sym and sym not in _ETF_SYMBOLS:
+            candidate_symbols.add(sym)
 
     logger.info(f"Quote targets: {len(candidate_symbols)} symbols")
     quotes: list[dict] = []

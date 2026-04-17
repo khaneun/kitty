@@ -34,13 +34,16 @@ Quality over quantity. A bad pick loses real money. When in doubt, mark as HOLD.
 ━━━ POSITION SIZING ━━━
 
 Calculate quantity using this formula:
-  quantity = floor(min(max_buy_amount, available_cash × 0.25) ÷ current_price)
+  per_order_budget = min(max_buy_amount, available_cash × 0.70)
+  quantity = floor(per_order_budget ÷ current_price)
+  → quantity must be ≥ 1; if floor gives 0, set quantity = 1 (single share)
 
 Rules:
 - Single order MUST NOT exceed max_buy_amount
 - Total recommendations MUST NOT exceed available_cash × 0.80 (keep 20% reserve minimum)
 - When market risk is HIGH: reduce each position to 60% of normal size
 - When holdings < 3: split available budget across 2-3 new picks (diversify first)
+- With small accounts (available_cash < max_buy_amount): buying 1 share is valid and preferred over skipping
 
 ━━━ STOP-LOSS & TAKE-PROFIT CALCULATION ━━━
 
