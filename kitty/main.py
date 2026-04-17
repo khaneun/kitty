@@ -401,8 +401,6 @@ async def run_trading_cycle(
     daily_report.end_cycle()
     reporter.mark_cycle_done()
 
-    # 9. 포트폴리오 출력
-    await print_portfolio_and_balance(broker, label="사이클 완료")
     logger.info("=== 매매 사이클 완료 ===")
 
 
@@ -585,6 +583,7 @@ async def main() -> None:
                     await print_portfolio_and_balance(broker)
                 except Exception as _se:
                     logger.debug(f"장 외 스냅샷 갱신 실패: {_se}")
+                _last_cycle_time = time.monotonic()  # 300s 간격 보장 (갱신 없으면 wait=0 무한루프)
             elif not reporter.is_paused:
                 try:
                     await run_trading_cycle(
