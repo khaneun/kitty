@@ -897,13 +897,16 @@ _NON_TRADE_STATUSES = ("SKIPPED", "FAILED")
 def _classify_trade(action: str, reason: str, pnl_rate) -> str:
     if action == "BUY":      return "신규매수"
     if action == "BUY_MORE": return "추가매수"
-    r = (reason or "").lower()
-    if "손절" in r:                        return "손절"
-    if "익절" in r or "목표" in r:         return "익절"
-    if "교체" in r or "정체" in r:         return "종목교체"
+    # 실현 손익률 기반 분류 우선 — reason 텍스트에 의한 왜곡 방지
+    # (에이전트가 reason에 "손절"을 썼어도 실제 수익이 났다면 "손절"로 분류하지 않음)
     if pnl_rate is not None:
-        if pnl_rate < -0.5:               return "손절"
-        if pnl_rate > 0.5:                return "익절"
+        if pnl_rate < -0.5:   return "손절"
+        if pnl_rate > 0.5:    return "익절"
+    # pnl_rate 없거나 ±0.5% 이내일 때만 reason 텍스트로 보완
+    r = (reason or "").lower()
+    if "익절" in r or "목표" in r:  return "익절"
+    if "손절" in r:                  return "손절"
+    if "교체" in r or "정체" in r:  return "종목교체"
     return "매도"
 
 
@@ -926,18 +929,26 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
             for cycle in data.get("cycles", []):
                 ts = cycle.get("timestamp", "")
                 cycle_mode = cycle.get("mode", "paper")
-                # pnl_rate 맵 (symbol → pnl_rate) from stock_evaluation
-                pnl_map: dict[str, float] = {}
+
+                # stock_evaluation에서 pnl_rate + avg_price 맵 구성
+                pnl_map: dict[str, float | None] = {}
+                avg_price_map: dict[str, float] = {}
                 for ev in cycle.get("stock_evaluation", {}).get("evaluations", []):
                     sym = ev.get("symbol", "")
-                    if sym:
-                        pnl_map[sym] = ev.get("pnl_rate")
+                    if not sym:
+                        continue
+                    pnl_map[sym] = ev.get("pnl_rate")
+                    ap = ev.get("avg_price")
+                    if ap:
+                        avg_price_map[sym] = float(ap)
+
                 # order 맵 (symbol → order) from asset_management
                 order_map: dict[str, dict] = {}
                 for order in cycle.get("asset_management", {}).get("final_orders", []):
                     sym = order.get("symbol", "")
                     if sym:
                         order_map[sym] = order
+
                 # 매수 결과
                 for r in cycle.get("buy_results", []):
                     if r.get("status") in _NON_TRADE_STATUSES:
@@ -946,15 +957,22 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
                     order = order_map.get(sym, {})
                     action = order.get("action", "BUY")
                     reason = r.get("reason") or order.get("reason", "")
-                    pnl_rate = pnl_map.get(sym)
+                    exec_price = r.get("price") or 0
                     result.append({
                         "date": date, "time": ts, "symbol": sym,
-                        "name": r.get("name") or order.get("name", ""), "side": "매수", "action": action,
-                        "classify": _classify_trade(action, reason, pnl_rate),
-                        "quantity": r.get("quantity", 0), "price": r.get("price", 0),
+                        "name": r.get("name") or order.get("name", ""),
+                        "side": "매수", "action": action,
+                        "classify": _classify_trade(action, reason, None),
+                        "quantity": r.get("quantity", 0),
+                        "exec_price": exec_price,       # 체결가 (0 = 시장가)
+                        "price": exec_price,            # 하위 호환
+                        "avg_price": None,              # 매수는 avg_price 없음
+                        "pnl_rate": None,               # 매수 시점엔 손익 없음
+                        "eval_pnl": pnl_map.get(sym),  # 평가 시점 수익률 (참고용)
                         "status": r.get("status", ""), "reason": reason,
-                        "pnl_rate": pnl_rate, "source": source, "mode": cycle_mode,
+                        "source": source, "mode": cycle_mode,
                     })
+
                 # 매도 결과
                 for r in cycle.get("sell_results", []):
                     if r.get("status") in _NON_TRADE_STATUSES:
@@ -963,14 +981,29 @@ def api_trades(req: Request, days: int = Query(30, le=90)):
                     order = order_map.get(sym, {})
                     action = order.get("action", "SELL")
                     reason = r.get("reason") or order.get("reason", "")
-                    pnl_rate = pnl_map.get(sym)
+                    exec_price = r.get("price") or 0
+                    avg_price = avg_price_map.get(sym)
+
+                    # 실현 손익률: 체결가와 평균매수가 모두 있을 때 직접 계산
+                    # 없으면 stock_evaluation 평가 시점 수익률로 대체
+                    if exec_price and avg_price and avg_price > 0:
+                        realized_pnl = round((exec_price - avg_price) / avg_price * 100, 2)
+                    else:
+                        realized_pnl = pnl_map.get(sym)
+
                     result.append({
                         "date": date, "time": ts, "symbol": sym,
-                        "name": r.get("name") or order.get("name", ""), "side": "매도", "action": action,
-                        "classify": _classify_trade(action, reason, pnl_rate),
-                        "quantity": r.get("quantity", 0), "price": r.get("price", 0),
+                        "name": r.get("name") or order.get("name", ""),
+                        "side": "매도", "action": action,
+                        "classify": _classify_trade(action, reason, realized_pnl),
+                        "quantity": r.get("quantity", 0),
+                        "exec_price": exec_price,         # 체결가 (0 = 시장가)
+                        "price": exec_price,              # 하위 호환
+                        "avg_price": avg_price,           # 평균매수가
+                        "pnl_rate": realized_pnl,         # 실현 손익률 (체결가 기준)
+                        "eval_pnl": pnl_map.get(sym),     # 평가 시점 수익률 (참고용)
                         "status": r.get("status", ""), "reason": reason,
-                        "pnl_rate": pnl_rate, "source": source, "mode": cycle_mode,
+                        "source": source, "mode": cycle_mode,
                     })
 
     result.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
@@ -2866,22 +2899,59 @@ function showTradeDetail(i) {
   const t = _trSliceData[i];
   if (!t) return;
   const isNight = t.source === 'night';
-  const pnlTxt = t.pnl_rate != null ? (t.pnl_rate>=0?'+':'')+t.pnl_rate.toFixed(2)+'%' : '-';
-  const pnlColor = t.pnl_rate==null?'#8b949e':t.pnl_rate>=0?'#f85149':'#4493f8';
-  const priceStr = t.price
-    ? (isNight ? '$'+Number(t.price).toFixed(2) : Number(t.price).toLocaleString()+'원')
-    : '시장가';
+  const isSell = t.side === '매도';
+
+  // 실현 손익률 (매도만 의미 있음)
+  const pnl = isSell ? t.pnl_rate : null;
+  const evalPnl = t.eval_pnl;
+  const pnlTxt = pnl != null ? (pnl>=0?'+':'')+Number(pnl).toFixed(2)+'%' : '-';
+  // 한국 주식: 수익=빨강, 손실=파랑
+  const pnlColor = pnl==null ? '#8b949e' : pnl>=0 ? '#f85149' : '#4493f8';
+
+  // 체결가
+  const execPrice = t.exec_price || t.price || 0;
+  const fmtPrice = (p) => p ? (isNight ? '$'+Number(p).toFixed(2) : Number(p).toLocaleString()+'원') : '시장가 체결';
+  const execPriceStr = execPrice ? fmtPrice(execPrice) : '시장가 체결';
+
+  // 매수 평균가 (매도 거래만)
+  const avgPriceStr = (isSell && t.avg_price) ? fmtPrice(t.avg_price) : null;
+
+  // 매수 총액
+  const totalStr = execPrice && t.quantity
+    ? (isNight ? '$'+(execPrice*t.quantity).toFixed(2) : (execPrice*t.quantity).toLocaleString()+'원')
+    : null;
+
   const srcLabel = isNight ? '🌙 Night (해외)' : '🐱 Kitty (국내)';
+
+  let rows = `<tr><td style="color:#8b949e;padding:5px 0;width:85px">구분</td><td style="color:#c9d1d9">${srcLabel} / <strong>${esc(t.classify)}</strong></td></tr>`;
+  rows += `<tr><td style="color:#8b949e;padding:5px 0">수량</td><td style="color:#c9d1d9">${(t.quantity||0).toLocaleString()}${isNight?' shares':'주'}</td></tr>`;
+
+  if (isSell) {
+    if (avgPriceStr) {
+      rows += `<tr><td style="color:#8b949e;padding:5px 0">매수 평균가</td><td style="color:#c9d1d9">${avgPriceStr}</td></tr>`;
+    }
+    rows += `<tr><td style="color:#8b949e;padding:5px 0">매도 체결가</td><td style="color:#c9d1d9">${execPriceStr}</td></tr>`;
+    rows += `<tr><td style="color:#8b949e;padding:5px 0">실현 손익률</td><td style="color:${pnlColor};font-weight:700">${pnlTxt}</td></tr>`;
+    // eval_pnl이 pnl_rate와 다를 경우 참고용으로 표시
+    if (evalPnl != null && pnl != null && Math.abs(evalPnl - pnl) > 0.3) {
+      const evalColor = evalPnl>=0 ? '#f85149' : '#4493f8';
+      rows += `<tr><td style="color:#484f58;padding:5px 0;font-size:11px">평가 시점</td><td style="color:${evalColor};font-size:11px">${evalPnl>=0?'+':''}${Number(evalPnl).toFixed(2)}% (체결 전 평가)</td></tr>`;
+    }
+  } else {
+    rows += `<tr><td style="color:#8b949e;padding:5px 0">매수 체결가</td><td style="color:#c9d1d9">${execPriceStr}</td></tr>`;
+    if (totalStr) {
+      rows += `<tr><td style="color:#8b949e;padding:5px 0">체결 금액</td><td style="color:#c9d1d9">${totalStr}</td></tr>`;
+    }
+    if (evalPnl != null) {
+      const evalColor = evalPnl>=0 ? '#f85149' : '#4493f8';
+      rows += `<tr><td style="color:#484f58;padding:5px 0;font-size:11px">매수 시 평가</td><td style="color:${evalColor};font-size:11px">${evalPnl>=0?'+':''}${Number(evalPnl).toFixed(2)}%</td></tr>`;
+    }
+  }
 
   document.getElementById('modal-title').textContent =
     `${t.name||t.symbol} (${t.symbol}) — ${t.date.slice(5)} ${t.time}`;
   document.getElementById('modal-body').innerHTML =
-    `<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">` +
-    `<tr><td style="color:#8b949e;padding:5px 0;width:80px">구분</td><td style="color:#c9d1d9">${srcLabel} / ${t.classify}</td></tr>` +
-    `<tr><td style="color:#8b949e;padding:5px 0">수량</td><td style="color:#c9d1d9">${(t.quantity||0).toLocaleString()}${isNight?' shares':'주'}</td></tr>` +
-    `<tr><td style="color:#8b949e;padding:5px 0">가격</td><td style="color:#c9d1d9">${priceStr}</td></tr>` +
-    `<tr><td style="color:#8b949e;padding:5px 0">수익률</td><td style="color:${pnlColor};font-weight:700">${pnlTxt}</td></tr>` +
-    `</table>` +
+    `<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">${rows}</table>` +
     `<div style="color:#8b949e;font-size:11px;margin-bottom:6px">사유</div>` +
     `<div style="color:#c9d1d9;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all">${esc(t.reason||'-')}</div>`;
   document.getElementById('modal').classList.add('show');
