@@ -19,7 +19,8 @@ from kitty.utils import logger
 
 FEEDBACK_DIR = Path("feedback")
 MAX_ENTRIES = 14
-PROMPT_RECENT = 3
+PROMPT_RECENT = 5
+REFLECTION_RECENT = 10  # 반성문 요약에 사용할 최근 항목 수
 RECURRING_THRESHOLD = 2
 LEARNED_THRESHOLD = 2
 
@@ -176,7 +177,35 @@ def get_feedback_prompt(agent_name: str) -> str:
         "",
     ]
 
-    # ── 2. 누적 요약: 검증된 규칙 + 반복 이슈 ─────────────────────────────────
+    # ── 2. 반성문 요약 → 강력 인스트럭션 ─────────────────────────────────────
+    reflection_entries = entries[-REFLECTION_RECENT:]
+    reflections = [e.get("reflection", "") for e in reflection_entries if e.get("reflection")]
+    low_score_reflections = [
+        e.get("reflection", "") for e in reflection_entries
+        if e.get("reflection") and isinstance(e.get("score"), (int, float)) and e.get("score", 100) <= 60
+    ]
+
+    if reflections:
+        lines.append("╔══════════════════════════════════════════════════════════╗")
+        lines.append("║  ⚠️  반성 인스트럭션 — 이 규칙을 반드시 따르세요  ⚠️  ║")
+        lines.append("╚══════════════════════════════════════════════════════════╝")
+        lines.append("아래는 실제 실패에서 도출된 절대 금지 패턴입니다. 무조건 회피하세요:")
+        lines.append("")
+        # 저점수(≤60) 반성문 우선 표시
+        shown = set()
+        for r in low_score_reflections[-5:]:
+            if r and r not in shown:
+                lines.append(f"  ❌ {r}")
+                shown.add(r)
+        for r in reflections[-5:]:
+            if r and r not in shown:
+                lines.append(f"  ⚠️ {r}")
+                shown.add(r)
+        lines.append("")
+        lines.append("위 반성 내용이 반복된다면 즉시 판단을 바꾸세요. 같은 실수의 반복은 용납되지 않습니다.")
+        lines.append("")
+
+    # ── 3. 누적 요약: 검증된 규칙 + 반복 이슈 ─────────────────────────────────
     accumulated = _build_accumulated_summary(entries)
 
     if accumulated["learned_rules"]:
@@ -191,7 +220,7 @@ def get_feedback_prompt(agent_name: str) -> str:
             lines.append(f"  ⚠️ {issue}")
         lines.append("")
 
-    # ── 3. 최근 상세 피드백 ──────────────────────────────────────────────────────
+    # ── 4. 최근 상세 피드백 ──────────────────────────────────────────────────────
     recent = entries[-PROMPT_RECENT:]
     lines.append(f"[최근 {len(recent)}일 상세 피드백]")
     for e in reversed(recent):
@@ -213,7 +242,7 @@ def get_feedback_prompt(agent_name: str) -> str:
     lines.append("")
     lines.append("=" * 60)
     lines.append(
-        "검증된 패턴을 유지하고, 반복 이슈를 최우선으로 개선하세요. "
+        "반성 인스트럭션 > 검증된 패턴 > 반복 이슈 순으로 우선 적용하세요. "
         "이 피드백은 실제 성과 데이터에서 누적 도출된 것입니다."
     )
 

@@ -660,6 +660,7 @@ def api_agent_scores(req: Request):
                         "score":       e.get("score", 0),
                         "summary":     e.get("summary", ""),
                         "improvement": e.get("improvement", ""),
+                        "reflection":  e.get("reflection", ""),
                     }
                     for e in sorted_entries
                 ]
@@ -668,6 +669,30 @@ def api_agent_scores(req: Request):
         else:
             result[agent] = []
     return result
+
+
+@app.get("/api/agent-reflections/{agent_name}")
+def api_agent_reflections(agent_name: str, req: Request):
+    """에이전트별 반성문 이력 반환 (최근 10건)"""
+    _auth(req)
+    # URL decode (한글 에이전트명)
+    import urllib.parse
+    agent_name = urllib.parse.unquote(agent_name)
+    all_agents = AGENTS + NIGHT_AGENTS
+    if agent_name not in all_agents:
+        return {"agent": agent_name, "reflections": []}
+    entries = _load_feedback_entries(agent_name)
+    reflections = [
+        {
+            "date":       e.get("date", ""),
+            "score":      e.get("score", 0),
+            "reflection": e.get("reflection", ""),
+            "summary":    e.get("summary", ""),
+        }
+        for e in entries
+        if e.get("reflection")
+    ][-10:]
+    return {"agent": agent_name, "reflections": list(reversed(reflections))}
 
 
 @app.get("/api/token-usage")
@@ -1173,22 +1198,82 @@ _ADV_SYSTEM = """당신은 AI 투자 에이전트 시스템의 성향 관리자�
 
 @app.get("/api/agent-feedback")
 def api_agent_feedback(req: Request):
-    """에이전트별 개선 피드백 항목 반환"""
+    """에이전트별 개선 피드백 항목 반환 (최근 10건)"""
     _auth(req)
     result: dict[str, list] = {}
     for agent in AGENTS + NIGHT_AGENTS:
         entries = _load_feedback_entries(agent)
-        result[agent] = [
+        filtered = [
             {
                 "date":        e.get("date", ""),
                 "score":       e.get("score"),
                 "improvement": e.get("improvement", ""),
                 "summary":     e.get("summary", ""),
+                "reflection":  e.get("reflection", ""),
             }
             for e in entries
             if e.get("improvement")
         ]
+        result[agent] = filtered[-10:]  # 최근 10건만
     return result
+
+
+@app.get("/api/agent-feedback/prompt-preview/{agent_name}")
+def api_feedback_prompt_preview(agent_name: str, req: Request):
+    """에이전트 시스템 프롬프트에 실제 주입되는 피드백 블록 미리보기"""
+    _auth(req)
+    import urllib.parse
+    agent_name = urllib.parse.unquote(agent_name)
+    # feedback/store.py의 get_feedback_prompt 직접 호출
+    fb_dir = NIGHT_FEEDBACK_DIR if agent_name.startswith("Night") else FEEDBACK_DIR
+    safe = agent_name.replace("/", "_").replace(" ", "_")
+    path = fb_dir / f"{safe}.json"
+    if not path.exists():
+        return {"agent": agent_name, "prompt": "(피드백 없음)"}
+    try:
+        import json as _json
+        from collections import Counter
+
+        entries = _json.loads(path.read_text(encoding="utf-8"))
+        if not entries:
+            return {"agent": agent_name, "prompt": "(피드백 없음)"}
+
+        # store.py의 get_feedback_prompt 로직을 여기서 재현 (간단 버전)
+        all_scores = [e.get("score", "?") for e in entries]
+        trend_str = " → ".join(str(s) for s in all_scores[-7:])
+        recent_scores = [s for s in all_scores[-5:] if isinstance(s, (int, float))]
+        avg_score = sum(recent_scores) / len(recent_scores) if recent_scores else 50
+
+        reflections = [e.get("reflection", "") for e in entries[-10:] if e.get("reflection")]
+        low_refl = [
+            e.get("reflection", "") for e in entries[-10:]
+            if e.get("reflection") and isinstance(e.get("score"), (int, float)) and e.get("score", 100) <= 60
+        ]
+
+        lines = [
+            f"점수 추이: {trend_str}",
+            f"최근 5일 평균: {avg_score:.0f}/100",
+            "",
+        ]
+        if reflections:
+            lines.append("⚠️ 반성 인스트럭션 (실제 주입 중):")
+            shown = set()
+            for r in (low_refl[-5:] + reflections[-5:]):
+                if r and r not in shown:
+                    lines.append(f"  ❌ {r}")
+                    shown.add(r)
+
+        recent = entries[-5:]
+        lines.append(f"\n최근 {len(recent)}일 피드백:")
+        for e in reversed(recent):
+            score = e.get("score", "?")
+            date = e.get("date", "")
+            imp = e.get("improvement", "")
+            lines.append(f"  [{date}] {score}/100: {imp}")
+
+        return {"agent": agent_name, "prompt": "\n".join(lines)}
+    except Exception as e:
+        return {"agent": agent_name, "prompt": f"(오류: {e})"}
 
 
 @app.post("/api/agent-feedback/add")
@@ -1536,6 +1621,12 @@ body{padding-bottom:80px}
 /* 프롬프트 버튼 */
 .btn-prompt{background:transparent;border:1px solid #30363d;color:#58a6ff;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-top:6px;width:100%}
 .btn-prompt:hover{background:#1c4a7a;border-color:#58a6ff}
+.btn-reflection{background:transparent;border:1px solid #30363d;color:#d29922;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-top:4px;width:100%}
+.btn-reflection:hover{background:#2d2005;border-color:#d29922}
+.reflection-item{border-left:3px solid #d29922;padding:8px 10px;margin-bottom:8px;background:#161b22;border-radius:0 4px 4px 0}
+.reflection-item.low-score{border-left-color:#f85149}
+.reflection-score{font-size:10px;font-weight:700;margin-bottom:4px}
+.reflection-text{font-size:11px;color:#c9d1d9;line-height:1.5;white-space:pre-wrap;word-break:break-word}
 .btn-detail{background:transparent;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:2px 7px;font-size:11px;cursor:pointer;white-space:nowrap}
 .btn-detail:hover{border-color:#58a6ff;color:#58a6ff}
 .cls-익절{background:#3d1010;color:#f85149}.cls-손절{background:#0d1a3d;color:#4493f8}
@@ -1785,6 +1876,7 @@ body{padding-bottom:80px}
     <div id="adv-prompt-box" style="display:none">
       <pre id="adv-prompt-text"></pre>
       <pre id="adv-prompt-feedback" style="display:none"></pre>
+      <button class="btn" style="margin-top:6px;font-size:11px;color:#d29922;border-color:#d29922;background:transparent" onclick="showAdvFeedbackPromptPreview()">📊 주입 중인 반성 인스트럭션 미리보기</button>
     </div>
   </div>
 
@@ -2641,15 +2733,19 @@ async function loadAgentScores() {
           <div class="agent-score" style="color:#484f58">-</div>
           <div class="agent-date">데이터 없음</div>
           <button class="btn-prompt" onclick="onPromptClick(event,'${agent}',false)">프롬프트</button>
+          <button class="btn-reflection" onclick="showReflectionModal(event,'${agent}',false)">반성문</button>
         </div>`;
       const latest = entries[entries.length-1];
       const color  = scoreColor(latest.score);
+      const hasReflection = entries.some(e=>e.reflection);
+      const reflBadge = hasReflection ? '' : '';
       return `
         <div class="agent-card">
           <div class="agent-name">${agent}</div>
           <div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div>
           <div class="agent-date">${latest.date.slice(5)}</div>
           <button class="btn-prompt" onclick="onPromptClick(event,'${agent}',false)">프롬프트</button>
+          <button class="btn-reflection" onclick="showReflectionModal(event,'${agent}',false)">반성문</button>
         </div>`;
     }).join('');
 
@@ -2805,6 +2901,33 @@ async function onPromptClick(event, agentName, isNight) {
   document.getElementById('modal').classList.add('show');
 }
 function closeModal(e){ if(e.target.id==='modal') document.getElementById('modal').classList.remove('show'); }
+
+async function showReflectionModal(event, agentName, isNight) {
+  event.stopPropagation();
+  document.getElementById('modal-title').textContent = agentName + ' — 반성문 이력';
+  document.getElementById('modal-body').innerHTML = '<div style="color:#8b949e;font-size:12px">로딩 중...</div>';
+  document.getElementById('modal').classList.add('show');
+  try {
+    const encoded = encodeURIComponent(agentName);
+    const data = await fetch('/api/agent-reflections/' + encoded).then(r=>r.json());
+    const reflections = data.reflections || [];
+    if(!reflections.length) {
+      document.getElementById('modal-body').innerHTML = '<div style="color:#484f58;font-size:12px">반성문 데이터 없음 (다음 사이클 평가 후 생성됩니다)</div>';
+      return;
+    }
+    document.getElementById('modal-body').innerHTML = reflections.map(r => {
+      const isLow = r.score <= 60;
+      const scoreColor = r.score >= 70 ? '#3fb950' : r.score >= 40 ? '#d29922' : '#f85149';
+      return `<div class="reflection-item${isLow ? ' low-score' : ''}">
+        <div class="reflection-score" style="color:${scoreColor}">${r.date.slice(5)} &nbsp; ${r.score}/100</div>
+        <div class="reflection-text">${esc(r.reflection)}</div>
+        ${r.summary ? '<div style="font-size:10px;color:#484f58;margin-top:4px">' + esc(r.summary) + '</div>' : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('modal-body').innerHTML = '<div style="color:#f85149;font-size:12px">로드 실패: ' + esc(String(e)) + '</div>';
+  }
+}
 
 // ── 포트폴리오 인라인 확장 ────────────────────────────────
 let _pfDataMap = {};
@@ -3208,10 +3331,10 @@ async function loadNightAgentScores() {
     document.getElementById('nt-agent-cards').innerHTML = agents.map(agent=>{
       const entries = data[agent];
       const krName = _NIGHT_AGENT_KR[agent] || agent.replace('Night','');
-      if(!entries.length) return `<div class="agent-card"><div class="agent-name">${krName}</div><div class="agent-score" style="color:#484f58">-</div><div class="agent-date">데이터 없음</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
+      if(!entries.length) return `<div class="agent-card"><div class="agent-name">${krName}</div><div class="agent-score" style="color:#484f58">-</div><div class="agent-date">데이터 없음</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button><button class="btn-reflection" onclick="showReflectionModal(event,'${agent}',true)">반성문</button></div>`;
       const latest = entries[entries.length-1];
       const color = scoreColor(latest.score);
-      return `<div class="agent-card"><div class="agent-name">${krName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date.slice(5)}</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button></div>`;
+      return `<div class="agent-card"><div class="agent-name">${krName}</div><div class="agent-score" style="color:${color}">${latest.score}<span style="font-size:14px;color:#8b949e">/100</span></div><div class="agent-date">${latest.date.slice(5)}</div><button class="btn-prompt" onclick="onPromptClick(event,'${agent}',true)">Prompt</button><button class="btn-reflection" onclick="showReflectionModal(event,'${agent}',true)">반성문</button></div>`;
     }).join('');
 
     const thead = `<thead><tr><th>에이전트</th>${allDates.map(d=>`<th>${d.slice(5)}</th>`).join('')}</tr></thead>`;
@@ -3252,15 +3375,34 @@ function renderAdvImprovements() {
     return;
   }
   container.innerHTML = agents.filter(a => _advFeedback[a]?.length > 0).map(agent => {
-    const items = [..._advFeedback[agent]].reverse();
+    const items = [..._advFeedback[agent]].reverse().slice(0, 10); // 최근 10건
     return `<div class="adv-agent-block">
       <div class="adv-agent-name">${esc(agent)}</div>
-      ${items.map(it=>`<div class="adv-item">
-        <span class="adv-item-date">${esc(it.date.slice(5))}</span>
-        <span class="adv-item-text">${esc(it.improvement)}</span>
-      </div>`).join('')}
+      ${items.map(it=>{
+        const scoreColor = it.score >= 70 ? '#3fb950' : it.score >= 40 ? '#d29922' : '#f85149';
+        const lowFlag = it.score <= 60 ? '<span style="color:#f85149;font-size:9px;margin-left:4px">⚠️저성과</span>' : '';
+        return `<div class="adv-item">
+          <span class="adv-item-date" style="color:${scoreColor}">${esc((it.date||'').slice(5))} <span style="font-size:9px">${it.score||'?'}/100</span>${lowFlag}</span>
+          <span class="adv-item-text">${esc(it.improvement)}</span>
+          ${it.reflection ? '<div style="font-size:10px;color:#d29922;margin-top:3px;padding-left:8px">📝 ' + esc(it.reflection.slice(0,120)) + (it.reflection.length>120?'...':'') + '</div>' : ''}
+        </div>`;
+      }).join('')}
     </div>`;
   }).join('');
+}
+
+async function showAdvFeedbackPromptPreview() {
+  const sel = document.getElementById('adv-prompt-sel').value;
+  if (!sel) return;
+  try {
+    const encoded = encodeURIComponent(sel);
+    const data = await fetch('/api/agent-feedback/prompt-preview/' + encoded).then(r=>r.json());
+    document.getElementById('modal-title').textContent = sel + ' — 주입 중인 피드백 요약';
+    document.getElementById('modal-body').textContent = data.prompt || '(없음)';
+    document.getElementById('modal').classList.add('show');
+  } catch(e) {
+    alert('피드백 미리보기 로드 실패: ' + e);
+  }
 }
 
 function showAdvPrompt() {
@@ -3269,11 +3411,23 @@ function showAdvPrompt() {
   if (!sel) { box.style.display='none'; return; }
   const prompt = _advPrompts[sel] || '(프롬프트 없음)';
   document.getElementById('adv-prompt-text').textContent = prompt;
-  const feedbacks = (_advFeedback[sel]||[]).slice(-5);
+  const feedbacks = (_advFeedback[sel]||[]).slice(-10); // 최근 10건
   const fbEl = document.getElementById('adv-prompt-feedback');
   if (feedbacks.length) {
-    const txt = '[📊 현재 주입 중인 피드백]\n' + feedbacks.map(f=>`• ${f.date}: ${f.improvement}`).join('\n');
-    fbEl.textContent = txt;
+    const lowScoreFbs = feedbacks.filter(f => f.score <= 60);
+    const sections = [];
+    if (lowScoreFbs.length) {
+      sections.push('⚠️ [저성과(≤60점) 반성 인스트럭션 — 강하게 주입 중]');
+      lowScoreFbs.slice(-3).forEach(f => {
+        if (f.reflection) sections.push(`❌ ${f.date.slice(5)}: ${f.reflection.slice(0,100)}`);
+      });
+    }
+    sections.push('\n[최근 10건 개선 과제]');
+    feedbacks.slice().reverse().forEach(f => {
+      const flag = f.score <= 60 ? '⚠️' : '•';
+      sections.push(`${flag} ${(f.date||'').slice(5)} [${f.score||'?'}]: ${f.improvement}`);
+    });
+    fbEl.textContent = sections.join('\n');
     fbEl.style.display = 'block';
   } else {
     fbEl.style.display = 'none';

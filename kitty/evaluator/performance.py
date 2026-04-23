@@ -4,7 +4,7 @@
   1. 오늘 DailyReport에서 각 에이전트의 결정 수집
   2. KIS API로 현재가/등락률 조회
   3. 에이전트별 정량 지표 + 구체적 판단 내역 기록
-  4. AI로 자연어 피드백 (성과 요약 + 개선 지침 + 유지할 패턴)
+  4. AI로 자연어 피드백 (성과 요약 + 개선 지침 + 유지할 패턴 + 반성문)
   5. feedback/*.json 에 저장 (BaseAgent가 다음 사이클부터 system_prompt에 주입)
 """
 import json
@@ -15,6 +15,14 @@ from kitty.config import AIProvider, settings
 from kitty.feedback.store import append_entry
 from kitty.report import DailyReport
 from kitty.utils import logger
+
+# 손실 패널티 기여 비율 (합계 = 1.0)
+_LOSS_PENALTY_WEIGHTS: dict[str, float] = {
+    "섹터분석가": 0.10,
+    "종목발굴가": 0.15,
+    "종목평가가": 0.38,
+    "자산운용가": 0.37,
+}
 
 
 class PerformanceEvaluator:
@@ -43,6 +51,16 @@ class PerformanceEvaluator:
         eod = await self._fetch_prices(symbols)
         logger.info(f"[평가] 현재가 수집: {len(eod)}개 종목")
 
+        # 재매수 패턴 감지 (손절 후 당일 동일 종목 재매수)
+        rebuy_symbols = self._detect_rebuy_patterns(daily_report)
+        if rebuy_symbols:
+            logger.warning(f"[평가] ⚠️ 재매수 패턴 감지: {rebuy_symbols}")
+
+        # 실현 손실 패널티 계산
+        loss_penalty = self._calc_loss_penalty(daily_report, eod)
+        if loss_penalty > 0:
+            logger.warning(f"[평가] 손실 패널티 적용: {loss_penalty:.1f}점")
+
         results: dict[str, Any] = {}
         for agent_name, eval_fn in [
             ("섹터분석가", self._eval_sector_analyst),
@@ -58,13 +76,32 @@ class PerformanceEvaluator:
                     continue
                 # decision_details는 AI에게 전달하되 최종 저장에서는 제외
                 decision_details = metrics.pop("decision_details", "")
-                feedback = await self._ai_feedback(agent_name, metrics, decision_details)
+
+                # 손실 패널티 적용 (해당 에이전트에만)
+                if loss_penalty > 0 and agent_name in _LOSS_PENALTY_WEIGHTS:
+                    weight = _LOSS_PENALTY_WEIGHTS[agent_name]
+                    penalty_pts = round(loss_penalty * weight)
+                    metrics["score"] = max(10, metrics["score"] - penalty_pts)
+                    metrics["loss_penalty_applied"] = penalty_pts
+
+                # 재매수 패턴 패널티 (종목평가가, 자산운용가에 추가 감점)
+                if rebuy_symbols and agent_name in ("종목평가가", "자산운용가"):
+                    rebuy_penalty = min(30, len(rebuy_symbols) * 15)
+                    metrics["score"] = max(10, metrics["score"] - rebuy_penalty)
+                    metrics["rebuy_symbols"] = rebuy_symbols
+                    metrics["rebuy_penalty_applied"] = rebuy_penalty
+
+                feedback = await self._ai_feedback(
+                    agent_name, metrics, decision_details,
+                    rebuy_symbols=rebuy_symbols,
+                )
                 entry = {
                     "date": daily_report.date,
                     "score": metrics["score"],
                     "summary": feedback.get("summary", f"점수 {metrics['score']}/100"),
                     "improvement": feedback.get("improvement", ""),
                     "good_pattern": feedback.get("good_pattern", ""),
+                    "reflection": feedback.get("reflection", ""),
                     "metrics": metrics,
                 }
                 append_entry(agent_name, entry)
@@ -74,6 +111,45 @@ class PerformanceEvaluator:
                 logger.error(f"[평가] {agent_name} 평가 오류: {e}")
 
         return results
+
+    # ──────────────────────────────────────────
+    # 재매수 패턴 감지
+    # ──────────────────────────────────────────
+
+    def _detect_rebuy_patterns(self, report: DailyReport) -> list[str]:
+        """당일 매도(손절 포함) 후 동일 종목 재매수 패턴 감지"""
+        sold_symbols: set[str] = set()
+        rebought: list[str] = []
+        for c in report.cycles:
+            for r in c.sell_results:
+                if r.get("status") in ("FILLED", "PARTIAL"):
+                    sym = r.get("symbol", "")
+                    if sym:
+                        sold_symbols.add(sym)
+            for r in c.buy_results:
+                if r.get("status") in ("FILLED", "PARTIAL"):
+                    sym = r.get("symbol", "")
+                    if sym and sym in sold_symbols and sym not in rebought:
+                        rebought.append(sym)
+        return rebought
+
+    def _calc_loss_penalty(self, report: DailyReport, eod: dict) -> float:
+        """실제 체결된 매수 종목의 EOD 손실 기반 패널티 계산 (0~40점)"""
+        losses: list[float] = []
+        for c in report.cycles:
+            for r in c.buy_results:
+                if r.get("status") in ("FILLED", "PARTIAL"):
+                    sym = r.get("symbol", "")
+                    exec_price = r.get("price", 0)
+                    if sym and exec_price and sym in eod:
+                        chg = (eod[sym]["price"] - exec_price) / exec_price * 100
+                        if chg < 0:
+                            losses.append(chg)
+        if not losses:
+            return 0.0
+        avg_loss = sum(losses) / len(losses)
+        # -5% 손실 → 20점 패널티, -10% → 40점 (상한)
+        return min(40.0, abs(avg_loss) * 4)
 
     # ──────────────────────────────────────────
     # 데이터 수집
@@ -387,13 +463,25 @@ class PerformanceEvaluator:
 
     async def _ai_feedback(
         self, agent_name: str, metrics: dict, decision_details: str = "",
+        rebuy_symbols: list[str] | None = None,
     ) -> dict:
         """성과 지표 + 구체적 판단 내역 + 과거 피드백 컨텍스트 → 누적 자연어 피드백"""
         from kitty.feedback.store import load_entries
 
+        score = metrics.get("score", 50)
+        is_low_score = score <= 60
+
         detail_section = ""
         if decision_details:
             detail_section = f"\n[구체적 판단 내역 — ✓ 정확, ✗ 오판]\n{decision_details}\n"
+
+        rebuy_section = ""
+        if rebuy_symbols:
+            rebuy_section = (
+                f"\n[⚠️ 심각한 재매수 패턴 감지]\n"
+                f"다음 종목을 당일 매도 후 재매수했습니다: {', '.join(rebuy_symbols)}\n"
+                f"이는 손절 후 같은 종목을 비싸게 재매수하는 최악의 반복 실패 패턴입니다.\n"
+            )
 
         # 과거 피드백 요약 제공 → AI가 반복되는 문제를 인식하고 누적 개선안 작성
         past_entries = load_entries(agent_name)
@@ -401,9 +489,12 @@ class PerformanceEvaluator:
         if past_entries:
             past_improvements = [e.get("improvement", "") for e in past_entries[-5:] if e.get("improvement")]
             past_goods = [e.get("good_pattern", "") for e in past_entries[-5:] if e.get("good_pattern")]
+            past_reflections = [e.get("reflection", "") for e in past_entries[-3:] if e.get("reflection")]
             past_section = "\n[과거 피드백 이력 — 반복 패턴을 파악하세요]\n"
             if past_improvements:
                 past_section += "최근 개선 제안:\n" + "\n".join(f"  - {p}" for p in past_improvements) + "\n"
+            if past_reflections:
+                past_section += "최근 반성문 요약:\n" + "\n".join(f"  - {r}" for r in past_reflections) + "\n"
             if past_goods:
                 past_section += "최근 좋은 패턴:\n" + "\n".join(f"  - {p}" for p in past_goods) + "\n"
             past_section += (
@@ -412,18 +503,26 @@ class PerformanceEvaluator:
                 "과거 좋은 패턴이 오늘도 유지됐다면, 오늘의 근거와 함께 강화하세요.\n"
             )
 
+        # 반성문 지시: 60점 이하면 강도 높임
+        reflection_instruction = (
+            '"reflection": "에이전트 자신의 반성문. 구체적인 실패 사례를 인정하고 다음에 절대 반복하지 않을 것을 다짐하는 문장. (150자 이내)"'
+            if not is_low_score else
+            '"reflection": "⚠️ 심각한 실패에 대한 강력한 반성문. 무엇을 잘못했는지, 왜 손실이 났는지, 어떤 판단이 틀렸는지 구체적으로 자기비판하고, 다시는 이 패턴을 반복하지 않겠다는 강한 다짐. 재매수 패턴이 있으면 반드시 언급. (250자 이내)"'
+        )
+
         prompt = (
             f"다음은 '{agent_name}' 에이전트의 최근 사이클 성과 데이터입니다.\n"
-            f"점수는 0~100점 척도입니다.\n\n"
+            f"점수는 0~100점 척도입니다. {'⚠️ 이 점수는 심각하게 낮습니다. 엄격하게 평가하세요.' if is_low_score else ''}\n\n"
             f"[성과 지표]\n{json.dumps(metrics, ensure_ascii=False, indent=2)}\n"
-            f"{detail_section}{past_section}\n"
+            f"{detail_section}{rebuy_section}{past_section}\n"
             "위 데이터를 분석하여 아래 JSON 형식으로만 응답하세요:\n"
             "{\n"
             '  "summary": "오늘 성과: 점수 + 핵심 결과 + 잘한 점/못한 점 (120자 이내)",\n'
             '  "improvement": "가장 중요한 이슈의 구체적 개선안. '
             '과거와 반복되는 이슈면 반복임을 명시하고 긴급도를 높이세요. (250자 이내)",\n'
             '  "good_pattern": "오늘 효과가 입증된 패턴. '
-            '과거 좋은 패턴과 일치하면 일관성을 언급하세요. (100자 이내, 없으면 빈 문자열)"\n'
+            '과거 좋은 패턴과 일치하면 일관성을 언급하세요. (100자 이내, 없으면 빈 문자열)",\n'
+            f'  {reflection_instruction}\n'
             "}"
         )
         try:
@@ -462,8 +561,15 @@ class PerformanceEvaluator:
         except Exception as e:
             logger.warning(f"[평가] AI 피드백 생성 실패 ({agent_name}): {e}")
 
+        score = metrics.get("score", 50)
+        default_reflection = (
+            f"점수 {score}/100. AI 피드백 생성 실패."
+            if score > 60 else
+            f"⚠️ 점수 {score}/100 — 심각한 저성과. 판단 로직 전면 재검토 필요."
+        )
         return {
-            "summary": f"점수 {metrics.get('score', 50)}/100 달성",
+            "summary": f"점수 {score}/100 달성",
             "improvement": "추가 데이터 축적 후 분석 예정",
             "good_pattern": "",
+            "reflection": default_reflection,
         }

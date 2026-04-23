@@ -111,6 +111,12 @@ Triggered when: aggregate portfolio P&L ≤ -3%
 - excd: NAS (NASDAQ), NYS (NYSE), AMS (AMEX). Default NAS if unsure.
 - order_type: SPLIT for qty > 10, SINGLE otherwise.
 - "No orders" is ONLY acceptable when: no sells needed AND total_buy_budget ≤ 0.
+
+━━━ RE-ENTRY PROHIBITION (SYSTEM HIGHEST PRIORITY) ━━━
+If context contains recent_sold_symbols:
+  - BUY / BUY_MORE for those symbols is ABSOLUTELY FORBIDDEN — no exceptions
+  - Pattern: sell low → rebuy high → repeat = guaranteed capital destruction
+  - System will automatically block any re-entry orders for recently sold symbols
 """
 
 
@@ -133,6 +139,7 @@ class NightAssetManagerAgent(NightBaseAgent):
             f"({q.get('change_rate', 0):+.2f}%) Vol:{q.get('volume', 0):,}"
             for q in quotes
         )
+        recent_sold = context.get("recent_sold_symbols", {})
         tendency_directive = context.get("tendency_directive", "")
         tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
@@ -147,8 +154,21 @@ class NightAssetManagerAgent(NightBaseAgent):
                 f"MUST include new buy orders. 'No orders' is NOT allowed.\n"
             )
 
+        sold_section = ""
+        if recent_sold:
+            q_map = {q["symbol"]: q for q in quotes}
+            sold_lines = [
+                f"  - {sym}: sold @${float(price):.2f}, current ${float(q_map.get(sym, {}).get('current_price', 0)):.2f}"
+                for sym, price in recent_sold.items()
+            ]
+            sold_section = (
+                "\n⛔ [TODAY'S SOLD SYMBOLS — NO BUY/BUY_MORE ALLOWED]\n"
+                + "\n".join(sold_lines)
+                + "\nSystem will auto-block re-entry. Allocate budget to OTHER symbols.\n"
+            )
+
         prompt = f"""Synthesize holding evaluations and new buy candidates to determine the final executable order list.
-{tendency_section}{diversity_section}
+{tendency_section}{diversity_section}{sold_section}
 [Holdings Evaluation (Stock Evaluator)]
 {json.dumps(stock_evaluation, ensure_ascii=False, indent=2)}
 

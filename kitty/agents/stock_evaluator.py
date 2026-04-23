@@ -92,6 +92,15 @@ reason에 반드시 왜 HOLD인지 설명해야 합니다.
 - 매도 수량 ≤ 보유수량 (보유보다 많이 매도 불가).
 - BUY_MORE 수량은 1회최대매수금액 이내.
 - price는 항상 0 (실행가는 매도/매수 실행가가 처리).
+
+━━━ 재매수 절대 금지 (가장 중요한 규칙) ━━━
+손절이나 매도 후 당일 같은 종목을 다시 사는 것은 절대 금지입니다.
+이 행위는 다음과 같은 파괴적 패턴을 만듭니다:
+  → 비싸게 매수 → 싸게 손절 → 다시 비싸게 재매수 → 반복 손실
+context에 recent_sold_symbols(당일 매도 종목)가 주어지면:
+  - 해당 종목에 대해 BUY_MORE 결정 금지
+  - 이미 HOLD 중이더라도 해당 사실을 reason에 경고로 명시
+  - 재매수 충동이 생기면 반드시 억제하고 다른 종목으로 분산하세요
 """
 
 
@@ -147,6 +156,7 @@ class StockEvaluatorAgent(BaseAgent):
                 "volume": quote.get("volume", 0),
             })
 
+        recent_sold = context.get("recent_sold_symbols", {})
         tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
         portfolio_meta = context.get("portfolio_meta", {})
@@ -158,8 +168,22 @@ class StockEvaluatorAgent(BaseAgent):
         elif holdings_count <= 2:
             diversity_section = f"\n[포트폴리오 다양성 경고]\n보유 종목이 {holdings_count}개뿐입니다. 집중 위험을 줄이기 위해 PARTIAL_SELL을 검토하세요.\n"
 
+        # 당일 매도 종목 경고 섹션
+        sold_section = ""
+        if recent_sold:
+            sold_names = []
+            for sym, price in recent_sold.items():
+                name_info = next((h.get("name", sym) for h in holdings_info if h.get("symbol") == sym), sym)
+                sold_names.append(f"{name_info}({sym}) @{int(price):,}원")
+            sold_section = (
+                "\n⛔ [당일 매도 종목 — BUY_MORE 절대 금지]\n"
+                f"아래 종목은 오늘 이미 매도되었습니다. BUY_MORE 결정 불가:\n"
+                + "\n".join(f"  - {n}" for n in sold_names)
+                + "\n이 종목들에 BUY_MORE를 제안하면 안 됩니다. 재매수는 손실을 배로 키웁니다.\n"
+            )
+
         prompt = f"""현재 보유 종목을 평가하여 각 종목의 처리 방향을 결정해주세요.
-{tendency_section}{diversity_section}
+{tendency_section}{diversity_section}{sold_section}
 [보유 종목 현황]
 {json.dumps(holdings_info, ensure_ascii=False, indent=2)}
 

@@ -93,6 +93,12 @@ You MUST explain WHY you chose HOLD in the reason field.
 - Quantity for SELL/PARTIAL_SELL must be ≤ holding_qty (never sell more than you hold).
 - BUY_MORE quantity must respect max_buy_amount.
 - price is always 0 (execution price handled by SellExecutor/BuyExecutor).
+
+━━━ RE-ENTRY AFTER SELL — STRICTLY PROHIBITED ━━━
+If context contains recent_sold_symbols (symbols sold today):
+  - BUY_MORE for those symbols is ABSOLUTELY FORBIDDEN
+  - This pattern destroys capital: sell low → rebuy high → repeat losses
+  - If tempted to re-enter, choose a DIFFERENT symbol instead
 """
 
 
@@ -137,6 +143,7 @@ class NightStockEvaluatorAgent(NightBaseAgent):
                 "volume": quote.get("volume", 0),
             })
 
+        recent_sold = context.get("recent_sold_symbols", {})
         tendency_section = f"\n{tendency_directive}\n" if tendency_directive else ""
 
         portfolio_meta = context.get("portfolio_meta", {})
@@ -150,8 +157,18 @@ class NightStockEvaluatorAgent(NightBaseAgent):
                 f"Actively consider SELL of stagnant positions for rotation or PARTIAL_SELL for diversification.\n"
             )
 
+        sold_section = ""
+        if recent_sold:
+            sold_names = [f"{sym} @${float(price):.2f}" for sym, price in recent_sold.items()]
+            sold_section = (
+                "\n⛔ [TODAY'S SOLD SYMBOLS — BUY_MORE ABSOLUTELY FORBIDDEN]\n"
+                f"These symbols were sold today. NO BUY_MORE allowed:\n"
+                + "\n".join(f"  - {n}" for n in sold_names)
+                + "\nRe-buying sold symbols amplifies losses. Choose different symbols.\n"
+            )
+
         prompt = f"""Evaluate current holdings and determine action for each position.
-{tendency_section}{diversity_section}
+{tendency_section}{diversity_section}{sold_section}
 [Current Holdings]
 {json.dumps(holdings_info, ensure_ascii=False, indent=2)}
 

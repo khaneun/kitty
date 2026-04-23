@@ -234,6 +234,7 @@ async def run_trading_cycle(
     tendency_agent: TendencyAgent,
     reporter: TelegramReporter,
     daily_report: DailyReport,
+    recent_sold_symbols: dict[str, float] | None = None,
 ) -> None:
     """매매 사이클 1회 실행"""
     logger.info("=== 매매 사이클 시작 ===")
@@ -324,6 +325,7 @@ async def run_trading_cycle(
         "max_buy_amount": settings.max_buy_amount,
         "tendency_directive": tendency_directive,
         "portfolio_meta": portfolio_meta,
+        "recent_sold_symbols": recent_sold_symbols or {},
     })
     daily_report.record_stock_evaluation(stock_evaluation)
     reporter.update_evaluation(stock_evaluation)
@@ -356,6 +358,7 @@ async def run_trading_cycle(
         "max_position_size": settings.max_position_size,
         "tendency_directive": tendency_directive,
         "portfolio_meta": portfolio_meta,
+        "recent_sold_symbols": recent_sold_symbols or {},
     })
     daily_report.record_asset_management(asset_plan)
     _save_agent_context("자산운용가", asset_plan)
@@ -397,6 +400,16 @@ async def run_trading_cycle(
     daily_report.record_executions(buy_results, sell_results)
     _save_agent_context("매수실행가", {"buy_results": buy_results})
     _save_agent_context("매도실행가", {"sell_results": sell_results})
+
+    # 당일 매도 종목 추적 업데이트 (재매수 방지용)
+    if recent_sold_symbols is not None:
+        for r in sell_results:
+            if r.get("status") in ("FILLED", "PARTIAL"):
+                sym = r.get("symbol", "")
+                price = r.get("price", 0) or int(quote_map.get(sym, {}).get("current_price", 0))
+                if sym and price:
+                    recent_sold_symbols[sym] = float(price)
+                    logger.info(f"[재매수방지] {sym} 매도 기록: {price:,}원")
 
     # 텔레그램 체결 보고 (시장가 주문은 quote 가격을 참조 가격으로 사용)
     quote_map = {q["symbol"]: q for q in quotes}
@@ -497,6 +510,7 @@ async def main() -> None:
     reporter.set_broker(broker)
 
     daily_report = DailyReport()
+    recent_sold_symbols: dict[str, float] = {}  # symbol → sell_price (당일 매도 종목, 재매수 방지용)
 
     _last_cycle_time: float = time.monotonic()
 
@@ -515,6 +529,7 @@ async def main() -> None:
             tendency_agent,
             reporter,
             daily_report,
+            recent_sold_symbols,
         )
 
     reporter.set_daily_report(daily_report)
@@ -586,6 +601,7 @@ async def main() -> None:
             if today != last_report_date:
                 await reporter.send(daily_report.telegram_summary())
                 daily_report = DailyReport()
+                recent_sold_symbols.clear()  # 날짜 바뀌면 당일 매도 기록 초기화
                 last_report_date = today
 
             # 8:50 이전 또는 15:30 이후에는 사이클 건너뜀 (모의/실전 공통)
@@ -610,6 +626,7 @@ async def main() -> None:
                         tendency_agent,
                         reporter,
                         daily_report,
+                        recent_sold_symbols,
                     )
 
                     # ── 사이클 종료 후 즉시 성과 평가 ──
