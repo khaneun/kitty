@@ -1,4 +1,4 @@
-"""Night mode buy executor — smart order execution for US stocks"""
+"""Night mode buy executor — all limit orders, no market orders"""
 import asyncio
 import math
 from typing import Any
@@ -11,37 +11,26 @@ from .base import NightBaseAgent
 SYSTEM_PROMPT = """You are the Buy Execution Specialist for a US stock automated trading system.
 
 ━━━ MISSION ━━━
-Execute buy orders with optimal price and minimal market impact.
-You do NOT decide what to buy — the Asset Manager already decided that.
+Execute buy orders using limit orders only. No market orders.
 Your job is to execute efficiently and report results accurately.
 
 ━━━ EXECUTION STRATEGY ━━━
+1. Place limit order at current market price
+2. Wait 10 seconds, check fill status
+3. If not filled → cancel → retry at +0.2% (attempt 2), +0.5% (attempt 3)
+4. If still not filled after 3 attempts → FAILED (do NOT use market order)
 
-Limit Order First (default):
-  1. Place limit order at current market price
-  2. Wait 10 seconds for fill
-  3. If filled → report FILLED with actual price
-  4. If not filled → cancel, wait 3s, retry as market order
-
-Market Order Fallback:
-  - Used when limit order times out
-  - Used when price = 0 (no reference price available)
-  - Max 3 attempts per chunk
-
-Split Execution (for quantity > 10):
-  - Divide into 2-3 equal chunks
-  - Execute each chunk independently
-  - Reduces market impact on larger orders
-
-━━━ PRE-FLIGHT CHECKS (handled by code, not AI) ━━━
-- Circuit breaker proximity: skip if stock up ≥ 15%
-- Cash validation: skip if insufficient funds
-- Quantity adjustment: reduce quantity if cash only covers partial order
+Split orders (qty > 10): divide into up to 3 chunks, each chunk follows the above strategy.
+Get fresh quote for each chunk to use current market price.
 
 ━━━ REPORTING ━━━
 Each execution result includes: symbol, order_id, status, quantity, price, chunk number.
-Status values: FILLED (confirmed), SUBMITTED (sent), SKIPPED (pre-flight fail), FAILED (error).
+Status: FILLED (confirmed fill), FAILED (all attempts exhausted or error).
+price: the actual limit price the order was placed at (NOT 0).
 """
+
+# Price adjustment multipliers per attempt (buy: step up to fill)
+_BUY_PRICE_ADJ = [1.000, 1.002, 1.005]
 
 
 class NightBuyExecutorAgent(NightBaseAgent):
@@ -54,33 +43,13 @@ class NightBuyExecutorAgent(NightBaseAgent):
         symbol: str,
         excd: str,
         quantity: int,
-        price: float,
         order_type: str,
         priority: str,
         name: str = "",
     ) -> list[dict[str, Any]]:
-        """
-        SPLIT: divide into chunks of max 5, try limit then market fallback
-        SINGLE: direct order
-
-        For each chunk:
-        1. Place limit order at current price
-        2. Wait 10 seconds (US market needs more time)
-        3. Check fill
-        4. If not filled: cancel, wait 3s, retry market order
-        5. Max 3 attempts
-        """
+        """All limit orders. Unfilled → cancel → retry at higher price (max 3 attempts)."""
         chunk_results: list[dict[str, Any]] = []
         _label = f"{name}({symbol})" if name else symbol
-
-        order_price = price
-        if order_price == 0:
-            try:
-                quote = await self.broker.get_quote(symbol)
-                order_price = quote.current_price
-            except Exception as e:
-                logger.warning(f"[Night:BuyExecutor] {_label} quote fetch failed, using market order: {e}")
-                order_price = 0
 
         use_split = order_type == "SPLIT" or quantity > 10
 
@@ -94,60 +63,81 @@ class NightBuyExecutorAgent(NightBaseAgent):
 
         for i, chunk_qty in enumerate(chunks):
             chunk_label = f"{_label} chunk {i + 1}/{len(chunks)} ({chunk_qty} shares)"
+
+            # Fresh quote per chunk
+            try:
+                quote = await self.broker.get_quote(symbol)
+                base_price = quote.current_price
+            except Exception as e:
+                logger.error(f"[Night:BuyExecutor] {chunk_label} quote failed: {e}")
+                chunk_results.append({
+                    "symbol": symbol,
+                    "status": "FAILED",
+                    "quantity": chunk_qty,
+                    "reason": f"Quote fetch failed: {e}",
+                    "chunk": i + 1,
+                })
+                continue
+
             success = False
 
             for attempt in range(3):
+                order_price = round(base_price * _BUY_PRICE_ADJ[attempt], 2)
                 try:
-                    if attempt == 0 and order_price > 0:
-                        logger.info(f"[Night:BuyExecutor] {chunk_label} limit buy @ ${order_price:,.2f}")
-                        order = await self.broker.buy(symbol, excd, chunk_qty, order_price)
-                        order_id = order.order_id
+                    logger.info(
+                        f"[Night:BuyExecutor] {chunk_label} limit buy @ ${order_price:,.2f} "
+                        f"(attempt {attempt + 1}, adj {_BUY_PRICE_ADJ[attempt]:.3f})"
+                    )
+                    order = await self.broker.buy(symbol, excd, chunk_qty, order_price)
+                    order_id = order.order_id
 
-                        await asyncio.sleep(10)
+                    await asyncio.sleep(10)
 
+                    try:
+                        status = await self.broker.get_order_status(order_id)
+                        remaining_qty = status.get("remaining_qty", chunk_qty)
+
+                        if remaining_qty == 0:
+                            logger.info(
+                                f"[Night:BuyExecutor] {chunk_label} FILLED @ ${order_price:,.2f}"
+                            )
+                            chunk_results.append({
+                                "symbol": symbol,
+                                "order_id": order_id,
+                                "status": "FILLED",
+                                "quantity": chunk_qty,
+                                "price": order_price,
+                                "chunk": i + 1,
+                            })
+                            success = True
+                            break
+
+                        logger.info(
+                            f"[Night:BuyExecutor] {chunk_label} unfilled "
+                            f"({remaining_qty} remaining) — cancel & retry"
+                        )
                         try:
-                            status = await self.broker.get_order_status(order_id)
-                            remaining_qty = status.get("remaining_qty", chunk_qty)
+                            await self.broker.cancel_order(order_id, excd, symbol, chunk_qty)
+                        except Exception as ce:
+                            logger.warning(
+                                f"[Night:BuyExecutor] {chunk_label} cancel failed: {ce}"
+                            )
+                        await asyncio.sleep(3)
 
-                            if remaining_qty == 0:
-                                logger.info(f"[Night:BuyExecutor] {chunk_label} limit order filled")
-                                chunk_results.append({
-                                    "symbol": symbol,
-                                    "order_id": order_id,
-                                    "status": "FILLED",
-                                    "quantity": chunk_qty,
-                                    "price": order_price,
-                                    "chunk": i + 1,
-                                })
-                                success = True
-                                break
-                            else:
-                                logger.info(
-                                    f"[Night:BuyExecutor] {chunk_label} unfilled ({remaining_qty} remaining) — cancel & retry market"
-                                )
-                                await self.broker.cancel_order(order_id, excd, symbol, chunk_qty)
-                                await asyncio.sleep(3)
-                                order_price = 0
-                        except Exception as e:
-                            logger.warning(f"[Night:BuyExecutor] {chunk_label} status check failed: {e}")
-                            order_price = 0
-                    else:
-                        logger.info(f"[Night:BuyExecutor] {chunk_label} market buy attempt {attempt + 1}")
-                        order = await self.broker.buy(symbol, excd, chunk_qty, 0)
-                        logger.info(f"[Night:BuyExecutor] {chunk_label} market order submitted")
-                        chunk_results.append({
-                            "symbol": symbol,
-                            "order_id": order.order_id,
-                            "status": "SUBMITTED",
-                            "quantity": chunk_qty,
-                            "price": 0,
-                            "chunk": i + 1,
-                        })
-                        success = True
-                        break
+                    except Exception as se:
+                        logger.warning(
+                            f"[Night:BuyExecutor] {chunk_label} status check failed: {se} — cancel & retry"
+                        )
+                        try:
+                            await self.broker.cancel_order(order_id, excd, symbol, chunk_qty)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(3)
 
                 except Exception as e:
-                    logger.error(f"[Night:BuyExecutor] {chunk_label} attempt {attempt + 1} failed: {e}")
+                    logger.error(
+                        f"[Night:BuyExecutor] {chunk_label} attempt {attempt + 1} failed: {e}"
+                    )
                     if attempt == 2:
                         chunk_results.append({
                             "symbol": symbol,
@@ -162,7 +152,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
                     "symbol": symbol,
                     "status": "FAILED",
                     "quantity": chunk_qty,
-                    "reason": "Max retries exceeded",
+                    "reason": "All 3 limit attempts unfilled",
                     "chunk": i + 1,
                 })
 
@@ -188,7 +178,6 @@ class NightBuyExecutorAgent(NightBaseAgent):
             symbol = order["symbol"]
             excd = order.get("excd", "NAS")
             quantity = int(order["quantity"])
-            price = float(order.get("price", 0))
             order_type = order.get("order_type", "SINGLE")
             priority = order.get("priority", "NORMAL")
 
@@ -198,7 +187,9 @@ class NightBuyExecutorAgent(NightBaseAgent):
 
             # Pre-flight: skip if up > 15% (US circuit breaker proximity)
             if quote and quote.get("change_rate", 0) >= 15.0:
-                logger.warning(f"[Night:BuyExecutor] {_label} up {quote['change_rate']:.1f}% — skip buy")
+                logger.warning(
+                    f"[Night:BuyExecutor] {_label} up {quote['change_rate']:.1f}% — skip buy"
+                )
                 all_chunk_results.append({
                     "symbol": symbol,
                     "status": "SKIPPED",
@@ -207,13 +198,10 @@ class NightBuyExecutorAgent(NightBaseAgent):
                 })
                 continue
 
-            # Pre-flight: 주문 가능 금액 검증
-            est_price = price
-            if est_price == 0 and quote:
-                est_price = float(quote.get("current_price", 0))
-            est_cost = est_price * quantity * 1.01 if est_price > 0 else 0  # 1% 여유분 포함
+            # Pre-flight: 주문 가능 금액 검증 (spot price 기준 추정)
+            est_price = float(quote.get("current_price", 0)) if quote else 0
+            est_cost = est_price * quantity * 1.01 if est_price > 0 else 0
             if est_cost > 0 and remaining_cash < est_cost:
-                # 가능한 만큼만 수량 조정
                 if est_price > 0:
                     affordable_qty = int(remaining_cash / (est_price * 1.01))
                 else:
@@ -226,7 +214,10 @@ class NightBuyExecutorAgent(NightBaseAgent):
                     all_chunk_results.append({
                         "symbol": symbol,
                         "status": "SKIPPED",
-                        "reason": f"Insufficient cash: need ${est_cost:,.2f}, available ${remaining_cash:,.2f}",
+                        "reason": (
+                            f"Insufficient cash: need ${est_cost:,.2f}, "
+                            f"available ${remaining_cash:,.2f}"
+                        ),
                         "quantity": quantity,
                     })
                     continue
@@ -237,16 +228,18 @@ class NightBuyExecutorAgent(NightBaseAgent):
                 quantity = affordable_qty
                 est_cost = est_price * quantity * 1.01
 
-            effective_order_type = "SPLIT" if (quantity > 10 or order_type == "SPLIT") else "SINGLE"
+            effective_order_type = (
+                "SPLIT" if (quantity > 10 or order_type == "SPLIT") else "SINGLE"
+            )
 
             try:
                 chunks = await self._execute_smart_buy(
-                    symbol, excd, quantity, price, effective_order_type, priority, name
+                    symbol, excd, quantity, effective_order_type, priority, name
                 )
                 all_chunk_results.extend(chunks)
                 # 성공한 주문 금액만큼 잔고 차감
                 for c in chunks:
-                    if c.get("status") in ("FILLED", "SUBMITTED"):
+                    if c.get("status") == "FILLED":
                         c_price = c.get("price", 0) or est_price
                         remaining_cash -= c_price * c.get("quantity", 0)
                         remaining_cash = max(0, remaining_cash)
@@ -263,7 +256,7 @@ class NightBuyExecutorAgent(NightBaseAgent):
                     "quantity": quantity,
                 })
 
-        # Consolidate per symbol
+        # Consolidate per symbol — weighted average price
         consolidated: dict[str, dict[str, Any]] = {}
         for r in all_chunk_results:
             sym = r["symbol"]
@@ -273,14 +266,26 @@ class NightBuyExecutorAgent(NightBaseAgent):
                     "name": quote_map.get(sym, {}).get("name", ""),
                     "status": r.get("status", "UNKNOWN"),
                     "quantity": 0,
-                    "price": r.get("price", 0),
+                    "price": 0,
                     "order_id": r.get("order_id", ""),
                     "chunks": [],
                 }
             consolidated[sym]["quantity"] += r.get("quantity", 0)
             consolidated[sym]["chunks"].append(r)
-            if r.get("status") == "FAILED" and consolidated[sym]["status"] not in ("FAILED",):
+            if r.get("status") == "FAILED" and consolidated[sym]["status"] != "FAILED":
                 consolidated[sym]["status"] = "PARTIAL"
+
+        # Compute weighted average exec price per symbol
+        for entry in consolidated.values():
+            filled = [
+                (c.get("quantity", 0), c.get("price", 0))
+                for c in entry["chunks"]
+                if c.get("status") == "FILLED" and c.get("price", 0) > 0
+            ]
+            if filled:
+                total_qty = sum(q for q, _ in filled)
+                total_cost = sum(q * p for q, p in filled)
+                entry["price"] = round(total_cost / total_qty, 4) if total_qty > 0 else 0
 
         buy_results = list(consolidated.values())
         return {"buy_results": buy_results, "total": len(buy_results)}
